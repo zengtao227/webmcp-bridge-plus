@@ -32,6 +32,13 @@ The MVP intentionally does **not** implement Native Messaging, direct macOS file
 
 See [`CONTEXT.md`](./CONTEXT.md) for the locked project baseline.
 
+For the current private DevSpace design and day-to-day operation, see:
+
+- [`docs/architecture.md`](./docs/architecture.md) — current architecture and how it works;
+- [`docs/adr/0001-devspace-private-tunnel.md`](./docs/adr/0001-devspace-private-tunnel.md) — why the design moved from public Funnel to Secure MCP Tunnel;
+- [`docs/usage.md`](./docs/usage.md) — how to use `@DevSpace` safely in normal work;
+- [`docs/troubleshooting.md`](./docs/troubleshooting.md) — known pitfalls, failure modes, and investigation order.
+
 ## Security model
 
 The model is not trusted with unrestricted tool output. High-value credentials must be protected by code enforcement rather than prompt instructions.
