@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { PassThrough } from 'node:stream';
 import { loadAdapterConfig } from '../adapter/src/config.js';
 import { DevSpaceOAuthClient } from '../adapter/src/oauth-client.js';
@@ -88,6 +89,21 @@ test('stdio is the default transport and exposes no address at all', async () =>
     assert.equal(response.result.echoed, 'tools/list');
     assert.equal(fake.state.mcpCalls.length, 1);
     assert.equal(fake.state.mcpCalls[0].presented, 'at-1');
+  } finally {
+    await handle.close();
+    await fake.close();
+  }
+});
+
+test('converts a Streamable HTTP SSE response into stdio JSON-RPC', async () => {
+  const fake = await startFakeDevSpace({ ownerToken: OWNER, mcpResponseType: 'sse' });
+  const { pipes, handle } = await startStdioAdapter(fake);
+  try {
+    const reply = pipes.next();
+    pipes.send({ jsonrpc: '2.0', id: 41, method: 'tools/list' });
+    const response = await reply;
+    assert.equal(response.id, 41);
+    assert.equal(response.result.echoed, 'tools/list');
   } finally {
     await handle.close();
     await fake.close();
@@ -186,6 +202,75 @@ test('notifications get no response, and malformed input gets a parse error', as
     assert.ok(events.some((entry) => entry.event === 'stdio_invalid_json'));
   } finally {
     await handle.close();
+    await fake.close();
+  }
+});
+
+test('drops an oversized frame through its newline instead of parsing a later fragment', async () => {
+  const fake = await startFakeDevSpace({ ownerToken: OWNER });
+  const { events, pipes, handle } = await startStdioAdapter(fake, {
+    ADAPTER_MAX_REQUEST_BYTES: '128',
+  });
+  try {
+    const smuggled = JSON.stringify({ jsonrpc: '2.0', id: 98, method: 'tools/list' });
+    pipes.sendRaw(`${'x'.repeat(256)}${smuggled}\n`);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(fake.state.mcpCalls.length, 0);
+    assert.ok(events.some((entry) => entry.event === 'stdio_line_too_large'));
+
+    const reply = pipes.next();
+    pipes.send({ jsonrpc: '2.0', id: 99, method: 'tools/list' });
+    assert.equal((await reply).id, 99);
+  } finally {
+    await handle.close();
+    await fake.close();
+  }
+});
+
+test('real stdio entrypoint keeps logs off stdout and accepts DevSpace SSE', async () => {
+  const fake = await startFakeDevSpace({ ownerToken: OWNER });
+  const child = spawn(process.execPath, ['adapter/bin/start.js'], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      DEVSPACE_UPSTREAM_URL: fake.url,
+      DEVSPACE_OWNER_TOKEN_REF: 'env:FAKE_OWNER_TOKEN',
+      FAKE_OWNER_TOKEN: OWNER,
+    },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', (chunk) => { stdout += chunk.toString('utf8'); });
+  child.stderr.on('data', (chunk) => { stderr += chunk.toString('utf8'); });
+
+  try {
+    child.stdin.write(`${JSON.stringify({
+      jsonrpc: '2.0',
+      id: 91,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'entrypoint-test', version: '1' },
+      },
+    })}\n`);
+
+    const deadline = Date.now() + 2_000;
+    while (!stdout.includes('\n') && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.ok(stdout.includes('\n'), `expected a response, stderr=${stderr}`);
+    const lines = stdout.trim().split('\n');
+    assert.equal(lines.length, 1);
+    const response = JSON.parse(lines[0]);
+    assert.equal(response.jsonrpc, '2.0');
+    assert.equal(response.id, 91);
+    assert.match(stderr, /adapter_stdio_ready/);
+    assert.ok(!stdout.includes('adapter_stdio_ready'));
+  } finally {
+    child.kill('SIGTERM');
+    await new Promise((resolve) => child.once('exit', resolve));
     await fake.close();
   }
 });

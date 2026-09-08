@@ -33,38 +33,45 @@
 
 ## Actual Evidence
 
-Ran 2026-09-08 against the live DevSpace container.
+Ran 2026-09-08 against the live DevSpace container and tunnel runtime.
 
-- `npm run check` → lint 37 modules, 110/110 tests, build OK, exit 0.
-- MCP through the adapter (defaults, no `DEVSPACE_OAUTH_RESOURCE` override):
-  `initialize` → 200 + `mcp-session-id` forwarded; `tools/list` → 200 with
-  `open_workspace, read, write, edit, bash`.
-- OAuth metadata surface: `/.well-known/oauth-protected-resource{,/mcp}`,
-  `/.well-known/oauth-authorization-server{,/mcp}`, `/register`, `/authorize`,
-  `/token`, `/callback` → all 404, so the tunnel stays in unauthenticated-target mode.
-- Fail-closed: wrong owner password → HTTP 502 `upstream_auth_unavailable`;
-  log line is only `{"event":"auth_failed","code":"INVALID_OWNER_TOKEN"}` — no password, no stack.
-- Isolation/binding: `docker ps` → `127.0.0.1:7676->7676/tcp`; `tailscale funnel status`
-  → `No serve config`; `verify-isolation.sh` → all PASS; listener is `127.0.0.1:8787` only.
-- Startup scripts: `dsup.sh` no longer contains any command that enables a Funnel and no
-  longer sets `DEVSPACE_PUBLIC_BASE_URL`; it also pins the persisted
-  `publicBaseUrl` in the `devspace-config` volume to `http://127.0.0.1:7676`.
+- `npm run check` → lint 44 modules, 143/143 tests, build OK, exit 0.
+- Live stdio MCP after a DevSpace container rebuild: `initialize` returned server
+  `devspace`; `tools/list` returned exactly `open_workspace, read, write, edit, bash`;
+  stdout contained JSON-RPC only and diagnostics appeared on stderr.
+- Live wrong owner credential failed closed; the fake credential was absent from
+  stdout/stderr and the only relevant diagnostic was
+  `{"event":"auth_failed","code":"INVALID_OWNER_TOKEN"}`.
+- `tunnel-client doctor --profile devspace --profile-dir ~/.config/tunnel-client --explain`
+  → `RESULT ok`; stdio reachability/OAuth URL checks were correctly skipped.
+- Real per-user LaunchAgent `com.webmcp.devspace-tunnel` is loaded with
+  `KeepAlive`; `install-launchd.sh --status` returned `ready=true`. A forced
+  `launchctl kickstart -k` changed the PID and returned to `ready=true`.
+- Exposure/isolation: `tailscale funnel status` → `No serve config`; no listener
+  exists on 8787; DevSpace publishes only `127.0.0.1:7676`; runtime health uses a
+  dynamic 127.0.0.1 port. `verify-isolation.sh` → all PASS.
+- Container mount narrowed from all of `~/Doc` to the approved `~/Doc/My code`
+  root. `/work/Backups` and `/work/devspace-container` are absent, and 14 detected
+  credential files are covered by read-only empty-file mounts.
+- Runtime key and LaunchAgent plist are both mode `0600`; the plist contains no
+  key. The adapter is reached only as tunnel-client's stdio child.
+- Startup scripts contain no Funnel enable command, fail closed if any Funnel
+  config exists, normalize DevSpace `publicBaseUrl` to loopback, and use the
+  LaunchAgent-aware `--status` check.
 
-Not yet done (blocked on credentials / a GUI session):
+Still requiring an account-side manual confirmation:
 
-- `tunnel-client doctor --profile devspace --explain` — needs `CONTROL_PLANE_API_KEY`.
-- Real ChatGPT tool call through the Tunnel — same blocker.
-- LaunchAgent load — `launchctl bootstrap` returns `5: Input/output error` from this
-  non-GUI shell; the plist is written and valid, and must be loaded from Terminal.app.
+- Send one harmless ChatGPT `@DevSpace` read-only request through the existing
+  connector. All local and control-plane prerequisites are ready.
 
 ## Unresolved Risks
 
-- DevSpace 1.0.8 requires OAuth on `/mcp`; the implementation must not reintroduce a
-  public authorization endpoint merely to satisfy that flow.
-  *Mitigated:* the adapter performs the whole OAuth exchange over loopback and serves no
-  OAuth metadata, so no public authorization endpoint exists.
-- The adapter is plain HTTP on loopback: any other local process can reach 127.0.0.1:8787.
-  Device-bound identity therefore still needs mTLS (adapter must serve HTTPS first,
-  because tunnel-client rejects mTLS on a non-HTTP binding).
+- DevSpace 1.0.8 requires OAuth on `/mcp`; the adapter performs that exchange over
+  loopback and serves no OAuth metadata, so no public authorization endpoint exists.
+- `bash.command` is shell text and cannot be exhaustively interpreted as path fields.
+  Its boundary is therefore the narrowed Docker mount plus credential overlays and
+  result redaction. This limitation is now explicit in `SECURITY.md` and the runbook.
+- The approved root is `~/Doc/My code`, not a per-repository allowlist. Set
+  `DEVSPACE_PROJECT_ROOT` to a narrower root when a session should see only one tree.
 - `publicBaseUrl` is persisted in the `devspace-config` volume. `dsup.sh` now normalizes
   it, but any manual edit to that volume can silently break the OAuth resource check.

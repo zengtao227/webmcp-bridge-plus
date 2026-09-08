@@ -16,7 +16,7 @@
 ChatGPT
   → OpenAI 托管隧道（控制面 api.openai.com）
   → Mac 主动外连 HTTPS（无入站端口）
-  → 本机私有适配器 127.0.0.1:8787
+  → tunnel-client 通过 stdio 启动本机私有适配器（无监听地址）
   → DevSpace 容器 127.0.0.1:7676（仅 loopback，容器网络内）
 ```
 
@@ -50,15 +50,17 @@ DevSpace 的 `publicBaseUrl` 可能是个公网域名（比如 Funnel 关掉后�
 
 | 控制 | 说明 |
 | --- | --- |
-| 只绑 loopback | `ADAPTER_LISTEN_HOST` 不是 `127.0.0.1` / `localhost` / `::1` 就拒绝启动 |
+| stdio 默认传输 | 适配器由 tunnel-client 作为子进程启动，没有端口或 socket 可被其他本机进程访问 |
 | 不信任任何请求头 | 不读 `Host` / `X-Forwarded-For` / `X-Real-IP` / 自报的设备标识 |
 | 不发布 OAuth 元数据 | 隧道侧不会触发浏览器授权，也不暴露端点 |
+| 工具 allowlist | 只转发当前已审查的 `open_workspace/read/write/edit/bash`；DevSpace 新增工具默认拒绝 |
 | 凭据只有引用 | `env:` / `file:` / `keychain:`，配置里永远没有明文 |
 | 日志脱敏 | bearer、JWT、命名字段、已注册的原文（≥8 字符）全部替换 |
 | 失败即关闭 | owner 密码错、JSON 畸形、body 超限、元数据异常一律拒绝，不降级放行 |
 
 设备绑定这件事不用 MAC 地址：MAC 不过公网路由，而且 `X-MAC-Address` 是调用方自己填的，
-可以伪造，达不到 fail-closed。需要设备绑定就上 mTLS（见下）。
+可以伪造。stdio 把可调用者收窄为持有 tunnel runtime 凭据并启动该子进程的
+tunnel-client，同时完全移除了可供其他本机进程连接的适配器地址。
 
 ## 怎么用
 
@@ -68,13 +70,13 @@ DevSpace 的 `publicBaseUrl` 可能是个公网域名（比如 Funnel 关掉后�
 ~/Doc/My\ code/webmcp-bridge/adapter/deploy/install-launchd.sh
 ```
 
-会写 `~/Library/LaunchAgents/com.webmcp.devspace-adapter.plist` 并拉起：
-`RunAtLoad` + `KeepAlive`，登录即起、崩了自拉、容器或网络恢复后自动重连。
-卸载：`./install-launchd.sh --uninstall`。
-
-> 必须在 Terminal.app 里跑。launchd 只能从真正的 GUI 会话装载，
-> 从被沙箱或非 Aqua 会话的进程里调 `launchctl bootstrap` 会报
-> `Bootstrap failed: 5: Input/output error`（脚本会识别并提示，plist 仍然是写好的）。
+脚本先用 tunnel-client 自带的 `runtimes connect` 生成并预检配置，再把
+`tunnel-client run` 安装成真正的 per-user LaunchAgent；tunnel-client 随登录启动，
+并通过 stdio 启动适配器。不会把一个没有调用方的 stdio 进程单独交给 launchd。
+首次运行会要求粘贴 Tunnel Runtime API key，并以 `0600` 权限保存到本机
+tunnel-client secrets 目录。卸载只移除本机 runtime，不会删除远端 tunnel：
+`./install-launchd.sh --uninstall`。安装器会创建无空格路径
+`~/.local/bin/webmcp-devspace-adapter`，避免 tunnel-client 把仓库路径里的空格误拆成参数。
 
 ### 2. 起 DevSpace（也是一次，之后就一直开着）
 
@@ -85,6 +87,13 @@ DevSpace 的 `publicBaseUrl` 可能是个公网域名（比如 Funnel 关掉后�
 `dsup.sh` 里开 Funnel 的代码已永久删除，也不再传 `DEVSPACE_PUBLIC_BASE_URL`
 ——不传时 DevSpace 用 `http://127.0.0.1:7676` 当自己的 base URL，
 正好和适配器连它的地址一致，OAuth 的 resource 校验才能过。
+容器默认只挂载已批准的 `~/Doc/My code` 到 `/work/My code`；
+`~/Doc/Backups` 和 `~/Doc/devspace-container` 不可见。可用
+`DEVSPACE_PROJECT_ROOT=/更窄的/项目根` 进一步收窄。
+
+`bash` 的 `command` 是 shell 文本，不可能靠路径字段解析穷尽所有写法。
+因此它的核心边界是 Docker 只挂载批准代码根、凭据文件覆盖，
+以及所有返回字符串再经 Secret Firewall；不声称 shell 内嵌路径一定能在读取前被拦截。
 
 > 如果你手动给 DevSpace 设了 `DEVSPACE_PUBLIC_BASE_URL`，就要同时给适配器设
 > `DEVSPACE_OAUTH_RESOURCE=<那个 URL>/mcp`。默认不设才是对的。
@@ -109,47 +118,34 @@ curl -s http://127.0.0.1:7676/.well-known/oauth-protected-resource/mcp
 
 ### 3. 隧道配置
 
-`adapter/deploy/tunnel-profile.devspace.yaml` 装到
-`~/.config/tunnel-client/devspace.yaml`。唯一要留意的是
-`mcp.server_urls` 指向 **8787（适配器）**，不是 7676（DevSpace 本体）。
-`api_key` 保持 `env:CONTROL_PLANE_API_KEY`，运行时再给。
+`adapter/deploy/tunnel-profile.devspace.yaml` 使用 tunnel-client 0.0.14 的
+`mcp.commands` 数组格式。日常安装优先运行上面的脚本，让 `runtimes connect` 生成
+与当前 tunnel-client 版本一致的 profile。Runtime API key 使用 `file:` 引用，明文
+不进入仓库、profile 或 launchd 参数。
 
 ## 验证
 
 ```bash
-npm run check                      # lint + 110 个测试 + build
-
-curl -s http://127.0.0.1:8787/healthz
-# → {"status":"ok","authenticated":true}
-
-# 所有 OAuth 元数据路径必须是 404
-for p in /.well-known/oauth-protected-resource/mcp \
-         /.well-known/oauth-authorization-server /authorize /token; do
-  curl -s -o /dev/null -w "$p %{http_code}\n" http://127.0.0.1:8787$p
-done
+npm run check
+tunnel-client doctor --profile devspace --explain
+~/Doc/My\ code/webmcp-bridge/adapter/deploy/install-launchd.sh --status
+# LaunchAgent 使用动态 loopback 健康端口，URL 记录在：
+# ~/Library/Application Support/tunnel-client/health/devspace.url
 
 tailscale funnel status            # 必须是 No serve config
-lsof -nP -iTCP:8787 -sTCP:LISTEN   # 必须只看到 127.0.0.1
+lsof -nP -iTCP:8787 -sTCP:LISTEN   # 必须没有输出（stdio 无监听）
 docker ps --filter name=devspace --format '{{.Ports}}'
 # → 127.0.0.1:7676->7676/tcp
 ~/Doc/devspace-container/verify-isolation.sh
 ```
 
-### 已实测（2026-09-08，对着真实 DevSpace 容器）
+### 验收要求（必须对着真实 DevSpace 和 tunnel runtime）
 
 - `initialize` 走适配器返回 200，并透传 `mcp-session-id`
 - 接着 `tools/list` 拿到 5 个真实工具：`open_workspace, read, write, edit, bash`
-- 8 个 OAuth 元数据路径全部 404
+- stdio 目标不执行 HTTP OAuth 发现，也不发布任何适配器 OAuth 端点
 - owner 密码故意填错 → 502 `upstream_auth_unavailable`，日志只有
   `{"event":"auth_failed","code":"INVALID_OWNER_TOKEN"}`，没有密码、没有栈
-- 当时容器仍带着已经不可达的 `DEVSPACE_PUBLIC_BASE_URL`，链路照样通
-
-## 还没做（下一步）
-
-- **mTLS**：适配器现在是明文 HTTP 的 loopback 端点。同一台 Mac 上的任何其他进程
-  都能连 8787。需要按设备绑定身份时，让适配器提供 HTTPS 并启用
-  `tunnel-client` 的 `--mcp.server-url="channel=main,url=https://.../mcp,client-cert=...,client-key=..."`。
-  注意：非 HTTP 的绑定上加 mTLS 会被 tunnel-client 拒绝，所以必须先上 HTTPS。
-- **ChatGPT 端真机验证**：需要 `CONTROL_PLANE_API_KEY`，跑
-  `tunnel-client doctor --profile devspace --explain`，再在 ChatGPT 里做一次
-  只读工具调用。
+- `install-launchd.sh --status` 返回 `ready=true`，动态 `readyz` 为 200
+- ChatGPT 能列出工具并完成一次无副作用的只读调用
+- `tailscale funnel status` 仍是 `No serve config`，8787 不再监听

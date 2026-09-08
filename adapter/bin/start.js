@@ -80,7 +80,14 @@ async function main() {
   }
 
   const redactor = createRedactor([ownerToken]);
-  const log = createLogger({ redactor });
+  // stdout is the MCP wire in stdio mode. A single log line there corrupts the
+  // protocol, so diagnostics must use stderr for this transport.
+  const log = createLogger({
+    redactor,
+    write: config.transport === 'stdio'
+      ? (line) => process.stderr.write(`${line}\n`)
+      : undefined,
+  });
 
   const oauthClient = new DevSpaceOAuthClient({
     upstreamMcpUrl: config.upstreamMcpUrl,

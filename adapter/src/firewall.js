@@ -1,8 +1,8 @@
 // Secret Firewall enforcement for the DevSpace adapter.
 //
 // CONTEXT.md 5.5 is a hard constraint: tool output must pass policy before it
-// reaches the model. DevSpace has the whole ~/Doc tree mounted, so an unfiltered
-// `read` result can absolutely contain .env files and private keys. Nothing
+// reaches the model. DevSpace has an approved project root mounted, so an
+// unfiltered `read` result can still contain .env files and private keys. Nothing
 // leaves this module without passing the repository's own policy, and a failure
 // inside the firewall must deny rather than fall through to raw output.
 
@@ -25,9 +25,14 @@ const PATH_ARGUMENT_KEYS = Object.freeze([
   'root',
   'dir',
   'directory',
+  'workingDirectory',
 ]);
 
 const MAX_PATH_ARGUMENT_LENGTH = 4096;
+const MAX_PATH_ARGUMENTS = 16;
+const MAX_ARGUMENT_DEPTH = 8;
+const ALLOWED_TOOL_NAMES = new Set(['open_workspace', 'read', 'write', 'edit', 'bash']);
+const TOOLS_REQUIRING_PATH = new Set(['open_workspace', 'read', 'write', 'edit']);
 
 export class FirewallError extends Error {
   constructor(message, code) {
@@ -37,24 +42,64 @@ export class FirewallError extends Error {
   }
 }
 
-export function extractRequestedPath(payload) {
+function isPlainObject(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+export function extractRequestedPaths(payload) {
   if (!payload || typeof payload !== 'object') {
-    return undefined;
+    return Object.freeze([]);
   }
   if (payload.method !== 'tools/call') {
-    return undefined;
+    return Object.freeze([]);
   }
   const args = payload.params?.arguments;
-  if (!args || typeof args !== 'object' || Array.isArray(args)) {
-    return undefined;
+  if (!isPlainObject(args)) {
+    throw new FirewallError('Tool arguments must be an object.', 'invalid_tool_arguments');
   }
-  for (const key of PATH_ARGUMENT_KEYS) {
-    const value = args[key];
-    if (typeof value === 'string' && value.length > 0 && value.length <= MAX_PATH_ARGUMENT_LENGTH) {
-      return value;
+
+  const paths = [];
+  const visit = (value, depth = 0) => {
+    if (depth > MAX_ARGUMENT_DEPTH) {
+      throw new FirewallError('Tool arguments are nested too deeply.', 'arguments_too_deep');
     }
-  }
-  return undefined;
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        visit(entry, depth + 1);
+      }
+      return;
+    }
+    if (!isPlainObject(value)) {
+      return;
+    }
+    for (const [key, entry] of Object.entries(value)) {
+      if (PATH_ARGUMENT_KEYS.includes(key)) {
+        if (
+          typeof entry !== 'string' ||
+          entry.length === 0 ||
+          entry.length > MAX_PATH_ARGUMENT_LENGTH
+        ) {
+          throw new FirewallError('Path arguments must be bounded strings.', 'invalid_path_argument');
+        }
+        paths.push(entry);
+        if (paths.length > MAX_PATH_ARGUMENTS) {
+          throw new FirewallError('Too many path arguments.', 'too_many_path_arguments');
+        }
+      } else {
+        visit(entry, depth + 1);
+      }
+    }
+  };
+  visit(args);
+  return Object.freeze(paths);
+}
+
+export function extractRequestedPath(payload) {
+  return extractRequestedPaths(payload)[0];
 }
 
 /**
@@ -62,20 +107,66 @@ export function extractRequestedPath(payload) {
  * DevSpace at all, so the secret is never even read.
  */
 export function authorizeRequest(payload) {
-  const requestedPath = extractRequestedPath(payload);
-  if (requestedPath === undefined) {
-    return { allowed: true, reason: 'no_path_to_evaluate', requestedPath: null };
+  if (payload?.method === 'tools/call') {
+    if (!Object.hasOwn(payload, 'id') || !['string', 'number'].includes(typeof payload.id)) {
+      return {
+        allowed: false,
+        reason: 'invalid_request_id',
+        requestedPath: null,
+        requestedPaths: Object.freeze([]),
+      };
+    }
+    const toolName = payload?.params?.name;
+    if (typeof toolName !== 'string' || !ALLOWED_TOOL_NAMES.has(toolName)) {
+      return {
+        allowed: false,
+        reason: 'tool_not_allowed',
+        requestedPath: null,
+        requestedPaths: Object.freeze([]),
+      };
+    }
   }
 
-  const decision = authorizeToolRequest({ requestedPath });
-  if (decision?.allowed !== true) {
+  let requestedPaths;
+  try {
+    requestedPaths = extractRequestedPaths(payload);
+  } catch (error) {
     return {
       allowed: false,
-      reason: decision?.reason ?? 'path_denied',
-      requestedPath,
+      reason: error instanceof FirewallError ? error.code : 'path_policy_failure',
+      requestedPath: null,
+      requestedPaths: Object.freeze([]),
     };
   }
-  return { allowed: true, reason: decision.reason ?? 'allowed', requestedPath };
+
+  const toolName = payload?.params?.name;
+  if (TOOLS_REQUIRING_PATH.has(toolName) && requestedPaths.length === 0) {
+    return {
+      allowed: false,
+      reason: 'missing_path_argument',
+      requestedPath: null,
+      requestedPaths,
+    };
+  }
+
+  for (const requestedPath of requestedPaths) {
+    const decision = authorizeToolRequest({ requestedPath });
+    if (decision?.allowed !== true) {
+      return {
+        allowed: false,
+        reason: decision?.reason ?? 'path_denied',
+        requestedPath,
+        requestedPaths,
+      };
+    }
+  }
+
+  return {
+    allowed: true,
+    reason: requestedPaths.length === 0 ? 'no_path_to_evaluate' : 'allowed',
+    requestedPath: requestedPaths[0] ?? null,
+    requestedPaths,
+  };
 }
 
 const BLOCKED_REPLACEMENT = '[blocked by Secret Firewall]';
@@ -92,9 +183,41 @@ function sanitizeTextNode(text, requestedPath) {
   };
 }
 
-function walk(value, requestedPath, stats) {
+function sanitizeString(text, key, requestedPath, stats) {
+  const direct = sanitizeTextNode(text, requestedPath);
+  if (direct.blocked) {
+    stats.blocked += 1;
+    return direct.text;
+  }
+  if (direct.redactions.length > 0) {
+    stats.redacted += 1;
+  }
+
+  // Preserve a structured field name as scanner context without returning
+  // that synthetic context to the caller. This catches { api_key: "..." }.
+  if (typeof key === 'string') {
+    const contextual = sanitizeTextNode(`${key}=${JSON.stringify(direct.text)}`, null);
+    if (contextual.redactions.length > 0) {
+      stats.redacted += 1;
+      return '[REDACTED]';
+    }
+  }
+
+  // A lone structured string still needs high-entropy literal detection.
+  const quoted = sanitizeTextNode(JSON.stringify(direct.text), null);
+  if (quoted.redactions.length > 0) {
+    stats.redacted += 1;
+    return JSON.parse(quoted.text);
+  }
+  return direct.text;
+}
+
+function walk(value, requestedPath, stats, key = null, textBlock = false) {
   if (Array.isArray(value)) {
     return value.map((entry) => walk(entry, requestedPath, stats));
+  }
+  if (typeof value === 'string') {
+    return sanitizeString(value, key, textBlock ? requestedPath : null, stats);
   }
   if (value === null || typeof value !== 'object') {
     return value;
@@ -102,21 +225,14 @@ function walk(value, requestedPath, stats) {
 
   const node = { ...value };
 
-  // MCP tool results carry text in content blocks shaped { type: 'text', text }.
-  if (node.type === 'text' && typeof node.text === 'string') {
-    const sanitized = sanitizeTextNode(node.text, requestedPath);
-    node.text = sanitized.text;
-    if (sanitized.blocked) {
-      stats.blocked += 1;
-    }
-    if (sanitized.redactions.length > 0) {
-      stats.redacted += 1;
-    }
-    return node;
-  }
-
-  for (const [key, child] of Object.entries(node)) {
-    node[key] = walk(child, requestedPath, stats);
+  for (const [childKey, child] of Object.entries(node)) {
+    node[childKey] = walk(
+      child,
+      requestedPath,
+      stats,
+      childKey,
+      node.type === 'text' && childKey === 'text',
+    );
   }
   return node;
 }

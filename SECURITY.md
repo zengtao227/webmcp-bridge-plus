@@ -78,9 +78,21 @@ MCP endpoint configuration may be persisted only when it contains no bearer/acce
 
 MCP server host access should be requested per approved HTTPS origin rather than through blanket `http://*/*`, `https://*/*`, or `<all_urls>` permissions.
 
+For the local DevSpace tunnel deployment, the adapter transport defaults to
+stdio and stdout is reserved exclusively for JSON-RPC. Diagnostics go to stderr.
+HTTP mode is for explicit debugging only and refuses to start without a bearer
+token; loopback address membership is not treated as caller identity.
+
 ## Docker / DevSpace boundary
 
 The intended backend sandbox mounts only explicitly approved project directories. Do not mount the host home directory, `/`, `~/.ssh`, `~/.aws`, password stores, or `/var/run/docker.sock`, and do not blindly pass host environment variables into the sandbox.
+
+The DevSpace adapter forwards only the reviewed tool names
+`open_workspace`, `read`, `write`, `edit`, and `bash`. A backend upgrade cannot
+silently add a newly privileged tool. Because shell text cannot be parsed into a
+complete set of filesystem accesses, the `bash` boundary depends on the Docker
+mount allowlist, credential-file overlays, and result redaction as well as the
+request path checks.
 
 The Secret Firewall is defense in depth; it does not replace sandbox isolation.
 

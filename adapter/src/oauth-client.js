@@ -71,10 +71,13 @@ async function fetchMetadata(fetchImpl, url, timeoutMs) {
     throw new DevSpaceOAuthError('OAuth metadata must use application/json.', 'METADATA_CONTENT_TYPE');
   }
   try {
-    return await readBoundedJson(response, MAX_METADATA_BYTES);
+    return await readBoundedJson(response, MAX_METADATA_BYTES, timeoutMs);
   } catch (error) {
     if (error instanceof DevSpaceOAuthError && error.code === 'RESPONSE_TOO_LARGE') {
       throw new DevSpaceOAuthError('OAuth metadata exceeds the size limit.', 'METADATA_TOO_LARGE');
+    }
+    if (error instanceof DevSpaceOAuthError && error.code === 'RESPONSE_TIMEOUT') {
+      throw new DevSpaceOAuthError('OAuth metadata response timed out.', 'METADATA_TIMEOUT');
     }
     if (error instanceof DevSpaceOAuthError && error.code === 'INVALID_JSON') {
       throw new DevSpaceOAuthError('OAuth metadata is not valid JSON.', 'INVALID_METADATA_JSON');
@@ -333,7 +336,7 @@ export class DevSpaceOAuthClient {
         status: response.status,
       });
     }
-    const body = await readBoundedJson(response, MAX_METADATA_BYTES);
+    const body = await readBoundedJson(response, MAX_METADATA_BYTES, this.#timeoutMs);
     if (typeof body.client_id !== 'string' || body.client_id.length === 0) {
       throw new DevSpaceOAuthError('Registration response has no client_id.', 'REGISTRATION_INVALID');
     }
@@ -366,6 +369,13 @@ export class DevSpaceOAuthClient {
         throw new DevSpaceOAuthError('Authorization redirect has no Location header.', 'AUTHORIZATION_NO_LOCATION');
       }
       const redirect = new URL(location, this.#options.redirectUri);
+      const expectedRedirect = new URL(this.#options.redirectUri);
+      if (redirect.origin !== expectedRedirect.origin || redirect.pathname !== expectedRedirect.pathname) {
+        throw new DevSpaceOAuthError(
+          'Authorization redirect target does not match the registered redirect URI.',
+          'REDIRECT_URI_MISMATCH',
+        );
+      }
       const code = redirect.searchParams.get('code');
       const returnedState = redirect.searchParams.get('state');
       if (!code) {
@@ -410,7 +420,7 @@ export class DevSpaceOAuthClient {
         status: response.status,
       });
     }
-    const payload = await readBoundedJson(response, MAX_METADATA_BYTES);
+    const payload = await readBoundedJson(response, MAX_METADATA_BYTES, this.#timeoutMs);
     if (typeof payload.access_token !== 'string' || payload.access_token.length === 0) {
       throw new DevSpaceOAuthError('Token response has no access_token.', 'TOKEN_RESPONSE_INVALID');
     }

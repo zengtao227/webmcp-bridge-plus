@@ -83,6 +83,26 @@ npm run check
 
 `npm run build` validates the extension source and creates a clean `dist/extension` package from tracked extension files. Generated output is ignored by Git.
 
+## Private DevSpace tunnel
+
+The production-safe DevSpace path uses OpenAI Secure MCP Tunnel with a stdio
+adapter. There is no public inbound endpoint and no local adapter TCP port:
+
+```text
+ChatGPT → OpenAI tunnel → tunnel-client → stdio adapter → 127.0.0.1:7676 DevSpace
+```
+
+Install or repair the managed runtime with:
+
+```bash
+./adapter/deploy/install-launchd.sh
+```
+
+The installer uses `tunnel-client runtimes connect` to generate and preflight the
+current profile, then installs `tunnel-client run` as a per-user LaunchAgent.
+`tunnel-client` owns the complete tunnel process and spawns the adapter over
+stdio. See [`docs/private-tunnel-adapter.md`](./docs/private-tunnel-adapter.md).
+
 ## Current milestone
 
 This repository currently establishes the security/repository baseline and the first Secret Firewall implementation. The DeepSeek Web adapter, remote MCP transport, and integrated tool loop remain deliberately separated behind module boundaries so they can be implemented next without weakening the security boundary.

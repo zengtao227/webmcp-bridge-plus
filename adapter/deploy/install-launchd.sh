@@ -1,140 +1,270 @@
 #!/usr/bin/env bash
-# 把私有 MCP 适配器装成 launchd LaunchAgent：登录即起、崩了自动拉起、
-# 网络/容器恢复后自动重连。这样"开隧道"就不再是一个需要记得做的动作。
+# Install the complete private DevSpace path as a per-user LaunchAgent.
 #
-#   ./install-launchd.sh              安装并启动
-#   ./install-launchd.sh --uninstall  卸载
+# tunnel-client is the supervised process. It spawns the adapter over stdio, so
+# the adapter has no TCP/Unix listener of its own.
 #
-# 可覆盖的环境变量：
-#   ADAPTER_PORT=8787
-#   DEVSPACE_UPSTREAM_URL=http://127.0.0.1:7676
-#   DEVSPACE_OWNER_TOKEN_REF=keychain:devspace-owner-token
-#   NODE_BIN=/path/to/node    （建议固定，避免指向 WorkBuddy 临时 Node）
+#   ./install-launchd.sh              configure, install, start, verify
+#   ./install-launchd.sh --status     verify launchd and the dynamic readyz URL
+#   ./install-launchd.sh --uninstall  disable the local service (remote tunnel stays)
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 ENTRY="$REPO/adapter/bin/start.js"
-
-LABEL="com.webmcp.devspace-adapter"
+LAUNCHER_DIR="${TUNNEL_LAUNCHER_DIR:-$HOME/.local/bin}"
+LAUNCHER="$LAUNCHER_DIR/webmcp-devspace-adapter"
+ALIAS="${TUNNEL_ALIAS:-devspace}"
+PROFILE="${TUNNEL_PROFILE:-devspace}"
+PROFILE_DIR="${TUNNEL_PROFILE_DIR:-$HOME/.config/tunnel-client}"
+LIVE_PROFILE="$PROFILE_DIR/$PROFILE.yaml"
+RUNTIME_DIR="${TUNNEL_RUNTIME_DIR:-$HOME/Library/Application Support/tunnel-client}"
+KEY_DIR="${TUNNEL_SECRET_DIR:-$RUNTIME_DIR/secrets}"
+KEY_FILE="${TUNNEL_RUNTIME_KEY_FILE:-$KEY_DIR/devspace-runtime-api-key}"
+HEALTH_URL_FILE="${TUNNEL_HEALTH_URL_FILE:-$RUNTIME_DIR/health/$ALIAS.url}"
+LABEL="com.webmcp.devspace-tunnel"
 PLIST_DIR="$HOME/Library/LaunchAgents"
 PLIST="$PLIST_DIR/$LABEL.plist"
 LOG_DIR="$HOME/Library/Logs"
+STDOUT_LOG="$LOG_DIR/webmcp-devspace-tunnel.log"
+STDERR_LOG="$LOG_DIR/webmcp-devspace-tunnel.err"
+LEGACY_LABEL="com.webmcp.devspace-adapter"
+LEGACY_PLIST="$PLIST_DIR/$LEGACY_LABEL.plist"
 DOMAIN="gui/$(id -u)"
 
-ADAPTER_PORT="${ADAPTER_PORT:-8787}"
-ADAPTER_LISTEN_HOST="${ADAPTER_LISTEN_HOST:-127.0.0.1}"
-DEVSPACE_UPSTREAM_URL="${DEVSPACE_UPSTREAM_URL:-http://127.0.0.1:7676}"
-DEVSPACE_OWNER_TOKEN_REF="${DEVSPACE_OWNER_TOKEN_REF:-keychain:devspace-owner-token}"
-
-if [ "${1:-}" = "--uninstall" ]; then
-  launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
-  rm -f "$PLIST"
-  echo "已卸载 $LABEL"
-  exit 0
+TUNNEL_CLIENT_BIN="${TUNNEL_CLIENT_BIN:-$HOME/Doc/devspace-container/bin/tunnel-client}"
+if [ ! -x "$TUNNEL_CLIENT_BIN" ]; then
+  TUNNEL_CLIENT_BIN="$(command -v tunnel-client || true)"
 fi
-
-if [ ! -f "$ENTRY" ]; then
-  echo "找不到入口文件：$ENTRY" >&2
+if [ -z "$TUNNEL_CLIENT_BIN" ] || [ ! -x "$TUNNEL_CLIENT_BIN" ]; then
+  echo "找不到 tunnel-client；可用 TUNNEL_CLIENT_BIN=/absolute/path 指定。" >&2
   exit 1
 fi
 
-NODE_BIN="${NODE_BIN:-}"
-if [ -z "$NODE_BIN" ]; then
-  # Prefer stable system paths so the plist does not break when WorkBuddy
-  # switches its private Node.
-  for candidate in /usr/local/bin/node /opt/homebrew/bin/node; do
-    if [ -x "$candidate" ]; then
-      NODE_BIN="$candidate"
-      break
-    fi
-  done
-fi
-if [ -z "$NODE_BIN" ]; then
-  NODE_BIN="$(command -v node || true)"
-fi
-if [ -z "$NODE_BIN" ]; then
-  echo "找不到 node，可用 NODE_BIN=/path/to/node 指定。" >&2
+status() {
+  if ! launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
+    echo "未加载 LaunchAgent：$LABEL" >&2
+    return 1
+  fi
+  if [ ! -s "$HEALTH_URL_FILE" ]; then
+    echo "健康地址文件不存在或为空：$HEALTH_URL_FILE" >&2
+    return 1
+  fi
+
+  health_base="$(head -1 "$HEALTH_URL_FILE")"
+  if ! printf '%s' "$health_base" | grep -Eq '^http://127\.0\.0\.1:[0-9]+$'; then
+    echo "拒绝使用非 loopback 或格式异常的健康地址：$health_base" >&2
+    return 1
+  fi
+
+  ready="$(curl --silent --show-error --fail --max-time 2 "$health_base/readyz" 2>/dev/null || true)"
+  if [ "$ready" != "ready" ]; then
+    echo "LaunchAgent 已加载，但 tunnel runtime 尚未 ready：$health_base/readyz" >&2
+    return 1
+  fi
+
+  pid="$(launchctl print "$DOMAIN/$LABEL" 2>/dev/null | sed -nE 's/^[[:space:]]*pid = ([0-9]+)$/\1/p' | head -1)"
+  echo "ready=true label=$LABEL pid=${pid:-unknown} health=$health_base/readyz"
+}
+
+disable_plist() {
+  source_plist="$1"
+  if [ ! -f "$source_plist" ]; then
+    return
+  fi
+  disabled_plist="$source_plist.disabled"
+  if [ -e "$disabled_plist" ]; then
+    disabled_plist="$disabled_plist.$(date +%Y%m%d%H%M%S)"
+  fi
+  mv "$source_plist" "$disabled_plist"
+}
+
+restore_existing_launch_agent() {
+  if [ "${had_service:-0}" -ne 1 ] || [ ! -f "$PLIST" ]; then
+    return
+  fi
+  launchctl enable "$DOMAIN/$LABEL" >/dev/null 2>&1 || true
+  launchctl bootstrap "$DOMAIN" "$PLIST" >/dev/null 2>&1 || true
+}
+
+case "${1:-}" in
+  --status)
+    status
+    exit $?
+    ;;
+  --uninstall)
+    launchctl bootout "$DOMAIN/$LABEL" >/dev/null 2>&1 || true
+    "$TUNNEL_CLIENT_BIN" runtimes stop "$ALIAS" >/dev/null 2>&1 || true
+    "$TUNNEL_CLIENT_BIN" runtimes rm "$ALIAS" >/dev/null 2>&1 || true
+    disable_plist "$PLIST"
+    launchctl bootout "$DOMAIN/$LEGACY_LABEL" >/dev/null 2>&1 || true
+    disable_plist "$LEGACY_PLIST"
+    echo "已停用本机 LaunchAgent 并移除 runtime 元数据：$ALIAS（远端 tunnel 和本机 key 保留）"
+    exit 0
+    ;;
+  "") ;;
+  *)
+    echo "用法：$0 [--status|--uninstall]" >&2
+    exit 2
+    ;;
+esac
+
+if [ ! -x "$ENTRY" ]; then
+  echo "适配器入口不存在或不可执行：$ENTRY" >&2
   exit 1
 fi
-if echo "$NODE_BIN" | grep -qi workbuddy; then
-  echo "⚠ 找到的 node 路径看起来是 WorkBuddy 内部路径：$NODE_BIN" >&2
-  echo "  建议设置 NODE_BIN 指向一个稳定的系统 Node（例如 /opt/homebrew/bin/node）。" >&2
+
+TUNNEL_ID="${TUNNEL_ID:-}"
+if [ -z "$TUNNEL_ID" ] && [ -f "$LIVE_PROFILE" ]; then
+  TUNNEL_ID="$(sed -nE \
+    -e 's/^[[:space:]]*tunnel_id:[[:space:]]*"?([^"[:space:]]+)"?.*/\1/p' \
+    -e 's/^[[:space:]]*"tunnel_id"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' \
+    "$LIVE_PROFILE" | head -1)"
 fi
-
-mkdir -p "$PLIST_DIR" "$LOG_DIR"
-
-# Safe temp file; mktemp prevents symlink attacks.
-ERR_TMP=$(mktemp /tmp/webmcp-launchd.XXXXXX)
-trap 'rm -f "$ERR_TMP"' EXIT
-
-cat > "$PLIST" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>$LABEL</string>
-
-  <key>ProgramArguments</key>
-  <array>
-    <string>$NODE_BIN</string>
-    <string>$ENTRY</string>
-  </array>
-
-  <!-- 只有引用，没有明文。真正的密码在 Keychain / 文件里。 -->
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>PATH</key>
-    <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
-    <key>ADAPTER_TRANSPORT</key>
-    <string>stdio</string>
-    <key>ADAPTER_LISTEN_HOST</key>
-    <string>$ADAPTER_LISTEN_HOST</string>
-    <key>ADAPTER_PORT</key>
-    <string>$ADAPTER_PORT</string>
-    <key>DEVSPACE_UPSTREAM_URL</key>
-    <string>$DEVSPACE_UPSTREAM_URL</string>
-    <key>DEVSPACE_OWNER_TOKEN_REF</key>
-    <string>$DEVSPACE_OWNER_TOKEN_REF</string>
-  </dict>
-
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <dict>
-    <key>SuccessfulExit</key>
-    <false/>
-  </dict>
-  <key>ThrottleInterval</key>
-  <integer>60</integer>
-
-  <key>StandardOutPath</key>
-  <string>$LOG_DIR/webmcp-devspace-adapter.log</string>
-  <key>StandardErrorPath</key>
-  <string>$LOG_DIR/webmcp-devspace-adapter.err</string>
-</dict>
-</plist>
-PLIST
-
-launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
-if ! launchctl bootstrap "$DOMAIN" "$PLIST" 2>"$ERR_TMP"; then
-  echo
-  echo "⚠ launchctl bootstrap 失败：$(tr -d '\n' < "$ERR_TMP")"
-  echo
-  echo "  plist 已经写好（内容是对的，$PLIST）。"
-  echo "  launchd 只能从真正的 GUI 会话里装载，所以请在 Terminal.app 里重跑一次："
-  echo
-  echo "      \"$HERE/install-launchd.sh\""
-  echo
-  echo "  或者手动："
-  echo "      launchctl bootstrap $DOMAIN \"$PLIST\""
-  echo "      launchctl kickstart -k $DOMAIN/$LABEL"
-  echo
-  echo "  没装载之前适配器不会运行 —— 这不会造成公网暴露，只是 ChatGPT 连不上。"
+if ! printf '%s' "$TUNNEL_ID" | grep -Eq '^tunnel_[0-9a-f]{32}$'; then
+  echo "缺少有效 tunnel ID。请设置 TUNNEL_ID=tunnel_<32位小写十六进制> 后重跑。" >&2
   exit 1
 fi
-launchctl enable "$DOMAIN/$LABEL" || true
-launchctl kickstart -k "$DOMAIN/$LABEL" || true
 
-printf '已安装 %s\n' "$LABEL"
+mkdir -p "$PROFILE_DIR" "$KEY_DIR" "$(dirname "$HEALTH_URL_FILE")" "$LAUNCHER_DIR" "$PLIST_DIR" "$LOG_DIR"
+chmod 700 "$PROFILE_DIR" "$KEY_DIR"
+
+if [ -e "$LAUNCHER" ] && [ ! -L "$LAUNCHER" ]; then
+  echo "拒绝覆盖已有文件：$LAUNCHER" >&2
+  exit 1
+fi
+ln -sfn "$ENTRY" "$LAUNCHER"
+
+if [ ! -s "$KEY_FILE" ]; then
+  runtime_key="${CONTROL_PLANE_API_KEY:-}"
+  if [ -z "$runtime_key" ]; then
+    printf '粘贴 OpenAI Tunnel Runtime API key（输入不会显示）：' >&2
+    IFS= read -r -s runtime_key
+    echo >&2
+  fi
+  if [ -z "$runtime_key" ]; then
+    echo "Runtime API key 为空；拒绝创建不可用的常驻服务。" >&2
+    exit 1
+  fi
+  umask 077
+  printf '%s' "$runtime_key" > "$KEY_FILE"
+  unset runtime_key
+fi
+chmod 600 "$KEY_FILE"
+
+# Let tunnel-client generate a profile that matches its installed version, and
+# prove the tunnel/key/stdio target before replacing any working service.
+had_service=0
+if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
+  had_service=1
+  launchctl bootout "$DOMAIN/$LABEL" >/dev/null 2>&1 || true
+fi
+"$TUNNEL_CLIENT_BIN" runtimes stop "$ALIAS" >/dev/null 2>&1 || true
+if ! "$TUNNEL_CLIENT_BIN" runtimes connect \
+    --alias "$ALIAS" \
+    --profile "$PROFILE" \
+    --profile-dir "$PROFILE_DIR" \
+    --tunnel-id "$TUNNEL_ID" \
+    --runtime-api-key "file:$KEY_FILE" \
+    --mcp-command "$LAUNCHER"; then
+  "$TUNNEL_CLIENT_BIN" runtimes status "$ALIAS" --json >&2 || true
+  "$TUNNEL_CLIENT_BIN" runtimes stop "$ALIAS" >/dev/null 2>&1 || true
+  restore_existing_launch_agent
+  exit 1
+fi
+
+status_json="$("$TUNNEL_CLIENT_BIN" runtimes status "$ALIAS" --json)"
+if ! printf '%s' "$status_json" | grep -Eq '"process_running"[[:space:]]*:[[:space:]]*true'; then
+  echo "$status_json" >&2
+  echo "临时 runtime 没有运行；拒绝安装 LaunchAgent。" >&2
+  "$TUNNEL_CLIENT_BIN" runtimes stop "$ALIAS" >/dev/null 2>&1 || true
+  restore_existing_launch_agent
+  exit 1
+fi
+if ! printf '%s' "$status_json" | grep -Eq '"ready"[[:space:]]*:[[:space:]]*true'; then
+  echo "$status_json" >&2
+  echo "临时 runtime 尚未 ready；拒绝安装 LaunchAgent。" >&2
+  "$TUNNEL_CLIENT_BIN" runtimes stop "$ALIAS" >/dev/null 2>&1 || true
+  restore_existing_launch_agent
+  exit 1
+fi
+
+# Generate the plist without interpolating values into XML markup.
+PLIST_LABEL="$LABEL" \
+PLIST_TUNNEL_CLIENT="$TUNNEL_CLIENT_BIN" \
+PLIST_PROFILE_DIR="$PROFILE_DIR" \
+PLIST_PROFILE="$PROFILE" \
+PLIST_STDOUT="$STDOUT_LOG" \
+PLIST_STDERR="$STDERR_LOG" \
+/usr/bin/python3 - "$PLIST" <<'PY'
+import os
+import plistlib
+import sys
+
+payload = {
+    "Label": os.environ["PLIST_LABEL"],
+    "ProgramArguments": [
+        os.environ["PLIST_TUNNEL_CLIENT"],
+        "run",
+        "--profile-dir",
+        os.environ["PLIST_PROFILE_DIR"],
+        "--profile",
+        os.environ["PLIST_PROFILE"],
+    ],
+    "EnvironmentVariables": {
+        "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+    },
+    "RunAtLoad": True,
+    "KeepAlive": True,
+    "ThrottleInterval": 30,
+    "StandardOutPath": os.environ["PLIST_STDOUT"],
+    "StandardErrorPath": os.environ["PLIST_STDERR"],
+}
+with open(sys.argv[1], "wb") as destination:
+    plistlib.dump(payload, destination)
+PY
+chmod 600 "$PLIST"
+plutil -lint "$PLIST" >/dev/null
+
+# Replace the temporary detached process with the real login service. The key
+# remains a file reference in the generated profile and never enters the plist.
+launchctl bootout "$DOMAIN/$LABEL" >/dev/null 2>&1 || true
+"$TUNNEL_CLIENT_BIN" runtimes stop "$ALIAS" >/dev/null 2>&1 || true
+: > "$HEALTH_URL_FILE"
+launchctl enable "$DOMAIN/$LABEL" >/dev/null 2>&1 || true
+if ! launchctl bootstrap "$DOMAIN" "$PLIST"; then
+  echo "LaunchAgent 加载失败；尝试恢复 tunnel-client 的临时托管进程。" >&2
+  "$TUNNEL_CLIENT_BIN" runtimes connect \
+    --alias "$ALIAS" \
+    --profile "$PROFILE" \
+    --profile-dir "$PROFILE_DIR" \
+    --tunnel-id "$TUNNEL_ID" \
+    --runtime-api-key "file:$KEY_FILE" \
+    --mcp-command "$LAUNCHER" >/dev/null 2>&1 || true
+  exit 1
+fi
+
+ready_now=0
+for _ in $(seq 1 30); do
+  if status >/dev/null 2>&1; then
+    ready_now=1
+    break
+  fi
+  sleep 1
+done
+if [ "$ready_now" -ne 1 ]; then
+  launchctl print "$DOMAIN/$LABEL" >&2 || true
+  tail -30 "$STDERR_LOG" >&2 2>/dev/null || true
+  echo "LaunchAgent 未在 30 秒内 ready；旧 HTTP 适配器仍保持禁用。" >&2
+  exit 1
+fi
+
+# Retire the obsolete standalone HTTP adapter only after the stdio tunnel is
+# proven ready. Keep its plist as a recoverable disabled artifact.
+launchctl bootout "$DOMAIN/$LEGACY_LABEL" >/dev/null 2>&1 || true
+disable_plist "$LEGACY_PLIST"
+
+status
+echo "✔ Secure MCP Tunnel 已由 launchd 常驻：$LABEL"
+echo "  适配器由 tunnel-client 通过 stdio 启动（无 8787 监听端口）"
+echo "  查看状态：$HERE/install-launchd.sh --status"

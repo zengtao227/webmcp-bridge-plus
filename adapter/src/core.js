@@ -150,8 +150,15 @@ export function createAdapterCore(config, {
       raw = await readBoundedText(response, config.maxResponseBytes);
     } catch (error) {
       clearTimeout(timeout);
-      log('upstream_response_too_large', {});
-      return { status: 502, payload: { error: 'upstream_response_too_large' }, contentType: 'json' };
+      const tooLarge = error?.code === 'RESPONSE_TOO_LARGE';
+      log(tooLarge ? 'upstream_response_too_large' : 'upstream_response_failed', {
+        code: error?.code ?? error?.name ?? 'UNKNOWN',
+      });
+      return {
+        status: 502,
+        payload: { error: tooLarge ? 'upstream_response_too_large' : 'upstream_response_unavailable' },
+        contentType: 'json',
+      };
     }
     clearTimeout(timeout);
 

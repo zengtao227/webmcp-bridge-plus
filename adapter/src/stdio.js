@@ -4,10 +4,34 @@
 // There is no port and no socket path, so no other local process can reach the
 // adapter at all. Loopback was never authorization; this removes the address.
 
-const MAX_LINE_BYTES = 8 * 1024 * 1024;
-
 function writeLine(stream, payload) {
   stream.write(`${JSON.stringify(payload)}\n`);
+}
+
+function parseSseMessages(raw) {
+  const messages = [];
+  let data = [];
+  const flush = () => {
+    if (data.length > 0) {
+      messages.push(JSON.parse(data.join('\n')));
+      data = [];
+    }
+  };
+  for (const sourceLine of raw.split('\n')) {
+    const line = sourceLine.replace(/\r$/, '');
+    if (line === '') {
+      flush();
+      continue;
+    }
+    if (line.startsWith(':')) {
+      continue;
+    }
+    if (line.startsWith('data:')) {
+      data.push(line.slice(5).replace(/^ /, ''));
+    }
+  }
+  flush();
+  return messages;
 }
 
 export function createStdioAdapter(core, config, {
@@ -16,6 +40,7 @@ export function createStdioAdapter(core, config, {
   stdout = process.stdout,
 } = {}) {
   let buffer = Buffer.alloc(0);
+  let discardingOversizedLine = false;
   let closed = false;
   // Serializes handling so responses stay ordered and a slow request cannot
   // interleave replies.
@@ -50,7 +75,9 @@ export function createStdioAdapter(core, config, {
       clientSessionId: null,
       clientProtocolVersion: null,
       method: 'POST',
-      accept: 'application/json',
+      // Streamable HTTP requires clients to accept both representations.
+      // DevSpace rejects an application/json-only request with HTTP 406.
+      accept: 'application/json, text/event-stream',
     });
 
     if (isNotification) {
@@ -62,9 +89,14 @@ export function createStdioAdapter(core, config, {
       return;
     }
 
-    let body;
+    let messages;
     try {
-      body = JSON.parse(result.body);
+      messages = result.contentType === 'sse'
+        ? parseSseMessages(result.body)
+        : [JSON.parse(result.body)];
+      if (messages.length === 0) {
+        throw new Error('No JSON-RPC message in upstream response.');
+      }
     } catch {
       log('stdio_upstream_unparsable', {});
       writeLine(stdout, {
@@ -74,29 +106,50 @@ export function createStdioAdapter(core, config, {
       });
       return;
     }
-    writeLine(stdout, body);
+    for (const message of messages) {
+      writeLine(stdout, message);
+    }
   }
 
   function onData(chunk) {
     // A stream may hand us a decoded string or raw bytes; frame on bytes either
     // way so the framing cannot be confused by encoding.
-    const piece = typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk;
-    buffer = Buffer.concat([buffer, piece]);
-    if (buffer.byteLength > MAX_LINE_BYTES) {
-      log('stdio_line_too_large', {});
-      buffer = Buffer.alloc(0);
-      return;
+    let piece = typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk;
+
+    // Once a line is over the configured request limit, discard through its
+    // newline. Never reinterpret a later chunk of that same oversized frame as
+    // a fresh JSON-RPC request.
+    if (discardingOversizedLine) {
+      const newline = piece.indexOf(0x0a);
+      if (newline === -1) {
+        return;
+      }
+      discardingOversizedLine = false;
+      piece = piece.subarray(newline + 1);
     }
+
+    buffer = Buffer.concat([buffer, piece]);
 
     let newline = buffer.indexOf(0x0a);
     while (newline !== -1) {
-      const line = buffer.subarray(0, newline).toString('utf8');
+      const lineBytes = buffer.subarray(0, newline);
       buffer = buffer.subarray(newline + 1);
-      pending = pending.then(() => (closed ? undefined : processLine(line)))
-        .catch((error) => {
-          log('stdio_request_failed', { code: error?.code ?? 'UNKNOWN' });
-        });
+      if (lineBytes.byteLength > config.maxRequestBytes) {
+        log('stdio_line_too_large', {});
+      } else {
+        const line = lineBytes.toString('utf8');
+        pending = pending.then(() => (closed ? undefined : processLine(line)))
+          .catch((error) => {
+            log('stdio_request_failed', { code: error?.code ?? 'UNKNOWN' });
+          });
+      }
       newline = buffer.indexOf(0x0a);
+    }
+
+    if (buffer.byteLength > config.maxRequestBytes) {
+      log('stdio_line_too_large', {});
+      buffer = Buffer.alloc(0);
+      discardingOversizedLine = true;
     }
   }
 
@@ -117,3 +170,5 @@ export function createStdioAdapter(core, config, {
     },
   };
 }
+
+export { parseSseMessages };

@@ -27,6 +27,7 @@ export async function startFakeDevSpace({
   advertiseRegistration = true,
   advertisedIssuer = null,
   toolResult = null,
+  mcpResponseType = 'json',
 } = {}) {
   const state = {
     toolResult,
@@ -146,19 +147,27 @@ export async function startFakeDevSpace({
       }
       if (req.method === 'POST') {
         const payload = JSON.parse(raw);
-        if (payload?.method === 'tools/call' && state.toolResult) {
-          json(res, 200, {
+        const responsePayload = payload?.method === 'tools/call' && state.toolResult
+          ? {
             jsonrpc: '2.0',
             id: payload?.id ?? null,
             result: state.toolResult,
+          }
+          : {
+            jsonrpc: '2.0',
+            id: payload?.id ?? null,
+            result: { echoed: payload?.method ?? null, viaAdapter: true },
+          };
+        if (mcpResponseType === 'sse') {
+          const body = `event: message\ndata: ${JSON.stringify(responsePayload)}\n\n`;
+          res.writeHead(200, {
+            'content-type': 'text/event-stream',
+            'content-length': Buffer.byteLength(body),
           });
+          res.end(body);
           return;
         }
-        json(res, 200, {
-          jsonrpc: '2.0',
-          id: payload?.id ?? null,
-          result: { echoed: payload?.method ?? null, viaAdapter: true },
-        });
+        json(res, 200, responsePayload);
         return;
       }
       res.writeHead(200, { 'content-type': 'application/json' });

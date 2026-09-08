@@ -198,6 +198,29 @@ test('rejects an authorization redirect that carries no state at all', async () 
   }
 });
 
+test('rejects an authorization redirect to a different registered target', async () => {
+  const fake = await startFakeDevSpace({ ownerToken: OWNER });
+  const client = makeClient(fake, {
+    fetchImpl: async (url, init) => {
+      const response = await fetch(url, init);
+      if (String(url).endsWith('/authorize') && response.status === 302) {
+        const location = new URL(response.headers.get('location'));
+        location.hostname = 'localhost';
+        return new Response(null, { status: 302, headers: { location: location.toString() } });
+      }
+      return response;
+    },
+  });
+  try {
+    await assert.rejects(
+      client.getAccessToken(),
+      (error) => error instanceof DevSpaceOAuthError && error.code === 'REDIRECT_URI_MISMATCH',
+    );
+  } finally {
+    await fake.close();
+  }
+});
+
 test('bounds metadata reads so a hostile authorization server cannot stream forever', async () => {
   const fake = await startFakeDevSpace({ ownerToken: OWNER });
   const originalFetch = globalThis.fetch;
@@ -228,6 +251,27 @@ test('bounds metadata reads so a hostile authorization server cannot stream fore
     globalThis.fetch = originalFetch;
     await fake.close();
   }
+});
+
+test('times out when OAuth response headers arrive but the body never finishes', async () => {
+  const stream = new ReadableStream({
+    pull() {},
+    cancel() {},
+  });
+  const client = new DevSpaceOAuthClient({
+    upstreamMcpUrl: 'http://127.0.0.1:7676/mcp',
+    ownerToken: OWNER,
+    timeoutMs: 30,
+    fetchImpl: async () => new Response(stream, {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }),
+  });
+
+  await assert.rejects(
+    client.getAccessToken(),
+    (error) => error instanceof DevSpaceOAuthError && error.code === 'METADATA_TIMEOUT',
+  );
 });
 
 test('times out when DevSpace never answers the token endpoint', async () => {

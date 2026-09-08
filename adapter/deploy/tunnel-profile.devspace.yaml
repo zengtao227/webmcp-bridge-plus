@@ -3,9 +3,9 @@
 # Install to: ~/.config/tunnel-client/devspace.yaml
 #
 # Properties that matter for the security boundary:
-#   * mcp.command points at the adapter entrypoint; tunnel-client spawns us
+#   * mcp.commands points at the adapter entrypoint; tunnel-client spawns us
 #     over stdio so there is no port, no socket, and no OAuth metadata to serve.
-#   * api_key is an env reference. Provide CONTROL_PLANE_API_KEY at run time.
+#   * api_key is a reference only. The installer uses a persistent 0600 file.
 #   * tunnel_id is a placeholder; fill in the actual id you got from OpenAI.
 config_version: 1
 control_plane:
@@ -14,11 +14,15 @@ control_plane:
   tunnel_id: "<YOUR_TUNNEL_ID_HERE>"
   api_key: "env:CONTROL_PLANE_API_KEY"
 health:
-  listen_addr: "127.0.0.1:8080"
+  # Ephemeral loopback avoids a fixed-port conflict. The installer writes the
+  # resolved address to tunnel-client's per-alias health URL file.
+  listen_addr: "127.0.0.1:0"
 admin_ui:
   open_browser: false
 log:
   level: info
   format: json
 mcp:
-  command: channel=main,command=/Users/zengtao/Doc/My\ code/webmcp-bridge/adapter/bin/start.js
+  commands:
+    - channel: main
+      command: "/Users/zengtao/.local/bin/webmcp-devspace-adapter"

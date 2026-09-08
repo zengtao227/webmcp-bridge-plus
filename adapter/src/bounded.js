@@ -7,16 +7,44 @@ import { DevSpaceOAuthError } from './errors.js';
  * peer can stream forever and we would buffer all of it. Stream and count
  * instead, and abort as soon as the ceiling is crossed.
  */
-export async function readBoundedText(response, limit) {
+async function readBeforeDeadline(reader, deadline) {
+  if (deadline === null) {
+    return reader.read();
+  }
+
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) {
+    void reader.cancel().catch(() => {});
+    throw new DevSpaceOAuthError('Response body timed out.', 'RESPONSE_TIMEOUT');
+  }
+
+  let timeout;
+  try {
+    return await Promise.race([
+      reader.read(),
+      new Promise((resolve, reject) => {
+        timeout = setTimeout(() => {
+          reject(new DevSpaceOAuthError('Response body timed out.', 'RESPONSE_TIMEOUT'));
+          void reader.cancel().catch(() => {});
+        }, remaining);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function readBoundedText(response, limit, timeoutMs = null) {
   if (!response.body) {
     return '';
   }
+  const deadline = Number.isFinite(timeoutMs) ? Date.now() + timeoutMs : null;
   const reader = response.body.getReader();
   const chunks = [];
   let bytes = 0;
   try {
     while (true) {
-      const { value, done } = await reader.read();
+      const { value, done } = await readBeforeDeadline(reader, deadline);
       if (done) {
         break;
       }
@@ -33,8 +61,8 @@ export async function readBoundedText(response, limit) {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-export async function readBoundedJson(response, limit) {
-  const text = await readBoundedText(response, limit);
+export async function readBoundedJson(response, limit, timeoutMs = null) {
+  const text = await readBoundedText(response, limit, timeoutMs);
   let parsed;
   try {
     parsed = JSON.parse(text);
