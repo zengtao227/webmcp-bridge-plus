@@ -8,37 +8,33 @@
 
 让 ChatGPT 的使用入口与实际执行机器彻底解耦。
 
-用户无论在世界任何地方、使用哪台电脑登录 ChatGPT 网页版，都只需要用自然语言指定项目和任务；系统根据项目注册信息自动选择正确的 DevSpace host，再在该 host 的批准项目根中执行。
+这里统一使用 **execution host / DevSpace host** 作为架构术语。`Mac Mini` 只是一种示例，不是架构假设；第二台或未来的执行机器也可能是另一台 MacBook Pro、Windows PC，或其他受支持的 host。
+
+用户无论在世界任何地方、使用哪台电脑登录 ChatGPT 网页版，都只需要用自然语言指定项目和任务；系统根据项目注册信息自动选择正确的 execution host，再在该 host 的批准项目根中执行。用户不应需要知道 host 的操作系统、机器名或父目录。
 
 目标体验：
 
 ```text
-@DevSpace 去 MyCode 看一下 payment 模块
+@DevSpace 去 webmcp-bridge 看一下当前修改
 ```
 
-自动路由到：
+自动路由到唯一注册该项目的 execution host，例如：
 
 ```text
-MacBook Pro
-→ DevSpace on MacBook Pro
-→ approved project MyCode
+execution host A (example: MacBook Pro)
+→ DevSpace backend on that host
+→ approved project webmcp-bridge
 ```
 
 而：
 
 ```text
-@DevSpace 去 Code 修一下 build
+@DevSpace 去 trading-engine 检查 funding rate logic
 ```
 
-自动路由到：
+可以自动路由到另一台 execution host，例如另一台 MacBook Pro、Mac Mini 或 Windows PC，只要该 host/backend 和项目路径已显式注册并满足安全边界。
 
-```text
-Mac Mini
-→ DevSpace on Mac Mini
-→ approved project Code
-```
-
-调用 ChatGPT 的终端设备不决定执行位置；项目注册表决定执行 host。
+调用 ChatGPT 的终端设备不决定执行位置；项目注册表决定 execution host。
 
 ## 路由不变量（V2.2 明确规则）
 

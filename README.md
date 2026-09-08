@@ -37,7 +37,8 @@ For the current private DevSpace design and day-to-day operation, see:
 - [`docs/architecture.md`](./docs/architecture.md) — current architecture and how it works;
 - [`docs/adr/0001-devspace-private-tunnel.md`](./docs/adr/0001-devspace-private-tunnel.md) — why the design moved from public Funnel to Secure MCP Tunnel;
 - [`docs/usage.md`](./docs/usage.md) — how to use `@DevSpace` safely in normal work;
-- [`docs/troubleshooting.md`](./docs/troubleshooting.md) — known pitfalls, failure modes, and investigation order.
+- [`docs/troubleshooting.md`](./docs/troubleshooting.md) — known pitfalls, failure modes, and investigation order;
+- [`docs/development-roadmap.md`](./docs/development-roadmap.md) — central roadmap, execution-host direction, and DevSpace Developer Efficiency operating standard.
 
 ## Security model
 
