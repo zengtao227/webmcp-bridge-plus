@@ -24,20 +24,24 @@ DevSpace to do, and it never grants permission the user did not give.
 
 ## Evolution note (V2.1 -> V2.2)
 
-- **V2.1 (live):** `project name -> /work/My code/<project>` on one known host.
-- **V2.2 (this model):** `project name -> registry entry -> host/app -> approved path -> open_workspace`.
+- **V2.1 (historical):** `project name -> /work/My code/<project>` on one known host.
+- **V2.2 (current routing model):** `project name -> registry entry -> host/app -> approved path -> open_workspace`.
 
-Only projects **explicitly listed in the registry** are routable. The projects
-that were registered under V2.1 keep the same paths (e.g. `webmcp-bridge` ->
-`/work/My code/webmcp-bridge`). Any project that is **not** in the registry now
-fails closed until an explicit registry entry is added. This is an intentional
-security tightening, not a loss of functionality for registered projects; a
-project name never synthesizes a filesystem path.
+Only projects **explicitly listed in the registry** are routable. Projects
+carried forward from V2.1 and explicitly registered in V2.2 keep the same
+paths (e.g. `webmcp-bridge` -> `/work/My code/webmcp-bridge`). Any project
+that is **not** in the registry now fails closed until an explicit registry
+entry is added. This is an intentional security tightening, not a loss of
+functionality for registered projects; a project name never synthesizes a
+filesystem path.
 
 ## When to activate
 
-Activate when the user invokes `@DevSpace` and refers to a project by a
-human-friendly name instead of an absolute approved path.
+Activate when the user invokes `@DevSpace` and refers to a project by:
+
+- canonical registered project name;
+- registered alias; or
+- exact registered absolute project path.
 
 Do not activate for ordinary follow-up tasks inside an already-open workspace.
 
@@ -137,7 +141,8 @@ registry unavailable          -> fail closed
 `/work/My code/<normalized-name>`. `open_workspace` may create a missing
 directory, so any synthesized path is an unacceptable side effect.
 
-This rule applies to BOTH V2.1 and V2.2.
+This rule applies to the current V2.2 routing model and all future multi-host
+routing.
 
 ## Resolution rules
 
@@ -230,8 +235,8 @@ continue automatically (see "Open the workspace").
 **Ambiguous** — more than one registered entry/alias could match, e.g.:
 
 ```text
-demo@macbook-pro
-demo@mac-mini
+demo@execution-host-a
+demo@execution-host-b
 ```
 
 stop and ask the user to choose. Do NOT prefer:
@@ -272,15 +277,18 @@ registered project  ->  try to dynamically invoke devspace-macbook-pro
 ```
 
 For a host other than the one currently connected, per-host App/backend selection
-becomes actionable only after V2.2 multi-App routing is validated live. Until
-then:
+is not yet available live. If routing resolves to a registered execution host/backend
+that is not the one currently connected:
 
-> V2.2 host selection requires the registered DevSpace App/backend for that host.
+- stop;
+- report that the registered execution host/backend is not currently selectable;
+- do NOT call `open_workspace` on the current backend;
+- do NOT fall back to another host or path;
+- do NOT ask the user to provide a different path.
 
-This capability is **not yet proven live** in this environment. If routing
-resolves to a host whose DevSpace App is not the one currently connected, report
-that explicitly and ask the user — do NOT invent an API call, do NOT switch Apps
-on your own, and do NOT fall back to another host.
+Only genuine routing ambiguity (more than one registered candidate matches) should
+ask the user to choose among registered candidates. Do NOT invent dynamic App
+switching.
 
 ### 6. Reuse an open workspace
 
@@ -318,8 +326,8 @@ Rules:
 
 - a `workspaceId` is only reusable for the SAME host/backend AND the SAME
   canonical project id;
-- never reuse a `MacBook Pro workspaceId` for `Mac Mini`, even if the project
-  name is identical;
+- never reuse a `workspaceId` from one execution host/backend on another
+  execution host/backend, even if the canonical project name is identical;
 - when the resolved host differs from the host that owns the current
   `workspaceId`, treat it as a new backend and obtain a fresh `workspaceId`
   through that host's registered App — do not carry the old id across.
