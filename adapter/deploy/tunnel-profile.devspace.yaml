@@ -1,0 +1,29 @@
+# Sample tunnel-client profile for the private DevSpace adapter.
+#
+# Install to: ~/.config/tunnel-client/devspace.yaml
+#
+# Properties that matter for the security boundary:
+#   * mcp.server_urls points at 127.0.0.1:8787 —— the private adapter, NOT
+#     DevSpace's own 7676. The adapter is what performs DevSpace OAuth locally,
+#     so the tunnel never needs a public authorization endpoint.
+#   * api_key is a reference, never a literal. Provide CONTROL_PLANE_API_KEY in
+#     the environment (or switch to keychain:<service>) at run time.
+#   * The adapter advertises no OAuth metadata, so this profile stays in
+#     unauthenticated-target mode: the tunnel carries no credentials for it.
+config_version: 1
+control_plane:
+  base_url: "https://api.openai.com"
+
+  tunnel_id: "tunnel_6a9e54e6d7e081919ccba1c8c79c4f96"
+  api_key: "env:CONTROL_PLANE_API_KEY"
+health:
+  listen_addr: "127.0.0.1:8080"
+admin_ui:
+  open_browser: false
+log:
+  level: info
+  format: json
+mcp:
+  server_urls:
+    - channel: main
+      url: "http://127.0.0.1:8787/mcp"
