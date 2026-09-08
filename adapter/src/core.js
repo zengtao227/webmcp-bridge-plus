@@ -12,6 +12,7 @@ import { readBoundedText } from './bounded.js';
 const DEFAULT_ACCEPT = 'application/json, text/event-stream';
 const SESSION_HEADER = 'mcp-session-id';
 const PROTOCOL_HEADER = 'mcp-protocol-version';
+const LEGACY_PROTOCOL_VERSION = '2025-06-18';
 
 // DevSpace answers these when *we* are not authenticated. They describe our
 // local credential exchange, so they are terminal here: never forwarded, and
@@ -70,6 +71,30 @@ function serializeSseEvents(events) {
   return out;
 }
 
+function hasSuccessfulResponse(raw, contentType, expectedId) {
+  let payloads;
+  try {
+    if (contentType === 'sse') {
+      payloads = parseSseEvents(raw)
+        .filter((entry) => entry.data.length > 0)
+        .map((entry) => JSON.parse(entry.data.join('\n')));
+    } else if (contentType === 'json') {
+      payloads = [JSON.parse(raw)];
+    } else {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+
+  return payloads.some((payload) => payload
+    && payload.jsonrpc === '2.0'
+    && payload.id === expectedId
+    && payload.result
+    && typeof payload.result === 'object'
+    && !Array.isArray(payload.result));
+}
+
 export function createAdapterCore(config, {
   oauthClient,
   log = () => {},
@@ -90,6 +115,7 @@ export function createAdapterCore(config, {
     body,
     clientSessionId,
     clientProtocolVersion,
+    useSession,
     allowRetry,
     accept = DEFAULT_ACCEPT,
   }) {
@@ -112,7 +138,7 @@ export function createAdapterCore(config, {
     if (body !== null) {
       headers['content-type'] = 'application/json';
     }
-    const effectiveSession = clientSessionId ?? sessionId;
+    const effectiveSession = useSession ? (clientSessionId ?? sessionId) : null;
     if (effectiveSession) {
       headers[SESSION_HEADER] = effectiveSession;
     }
@@ -144,7 +170,7 @@ export function createAdapterCore(config, {
       oauthClient.invalidate();
       log('upstream_unauthorized_retry', {});
       return callUpstream({
-        method, body, clientSessionId, clientProtocolVersion, allowRetry: false, accept,
+        method, body, clientSessionId, clientProtocolVersion, useSession, allowRetry: false, accept,
       });
     }
 
@@ -243,6 +269,59 @@ export function createAdapterCore(config, {
     return { body: JSON.stringify(result.payload), blocked: result.blocked, redacted: result.redacted };
   }
 
+  async function ensureLegacySession() {
+    if (sessionId) {
+      return true;
+    }
+
+    const initializeId = 'webmcp-adapter-initialize';
+    const initializePayload = {
+      jsonrpc: '2.0',
+      id: initializeId,
+      method: 'initialize',
+      params: {
+        protocolVersion: LEGACY_PROTOCOL_VERSION,
+        capabilities: {},
+        clientInfo: { name: config.clientName, version: '1' },
+      },
+    };
+    const initialized = await callUpstream({
+      method: 'POST',
+      body: JSON.stringify(initializePayload),
+      clientSessionId: null,
+      clientProtocolVersion: null,
+      useSession: false,
+      allowRetry: true,
+      accept: DEFAULT_ACCEPT,
+    });
+
+    if (initialized.status !== 200
+      || !sessionId
+      || !hasSuccessfulResponse(initialized.raw ?? '', initialized.contentType, initializeId)) {
+      sessionId = null;
+      log('legacy_session_initialize_failed', { status: initialized.status });
+      return false;
+    }
+
+    const notification = await callUpstream({
+      method: 'POST',
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
+      clientSessionId: null,
+      clientProtocolVersion: null,
+      useSession: true,
+      allowRetry: true,
+      accept: DEFAULT_ACCEPT,
+    });
+    if (notification.status < 200 || notification.status >= 300) {
+      sessionId = null;
+      log('legacy_session_notification_failed', { status: notification.status });
+      return false;
+    }
+
+    log('legacy_session_restored', {});
+    return true;
+  }
+
   /**
    * Handle one JSON-RPC payload.
    * Returns { status, body, contentType } where body is already redacted.
@@ -252,6 +331,7 @@ export function createAdapterCore(config, {
     clientProtocolVersion = null,
     method: httpMethod = 'POST',
     accept = DEFAULT_ACCEPT,
+    restoreSession = false,
   } = {}) {
     if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
       return {
@@ -272,11 +352,23 @@ export function createAdapterCore(config, {
       };
     }
 
+    if (restoreSession && !await ensureLegacySession()) {
+      return {
+        status: 502,
+        contentType: 'json',
+        body: JSON.stringify(localErrorEnvelope(payload.id, 'upstream_session_unavailable')),
+      };
+    }
+
     const upstream = await callUpstream({
       method: httpMethod === 'POST' ? 'POST' : httpMethod,
       body: httpMethod === 'POST' ? JSON.stringify(payload) : null,
       clientSessionId,
       clientProtocolVersion,
+      // An initialize request creates a fresh MCP session. Reusing the
+      // previous session header makes a second ChatGPT validation attempt fail
+      // with HTTP 400 instead of replacing the old session.
+      useSession: payload.method !== 'initialize',
       allowRetry: true,
       accept,
     });

@@ -71,6 +71,31 @@ test('scrubs an authorization URL out of free text', () => {
   assert.match(scrubbed.error.message, /\[redacted\]/);
 });
 
+test('preserves a JSON-RPC integer error code without exposing nested auth codes', () => {
+  const scrubbed = scrubAuthMetadata({
+    jsonrpc: '2.0',
+    id: 'discover-1',
+    error: {
+      code: -32601,
+      message: 'Method not found',
+      data: { code: 'oauth-authorization-code' },
+    },
+  });
+
+  assert.equal(scrubbed.error.code, -32601);
+  assert.equal(scrubbed.error.data.code, '[redacted]');
+});
+
+test('does not preserve a non-integer JSON-RPC error code', () => {
+  const scrubbed = scrubAuthMetadata({
+    jsonrpc: '2.0',
+    id: 1,
+    error: { code: 'oauth-authorization-code', message: 'invalid' },
+  });
+
+  assert.equal(scrubbed.error.code, '[redacted]');
+});
+
 test('scrubs RFC 8414 / RFC 9728 metadata references', () => {
   const scrubbed = scrubAuthMetadata({
     a: 'http://127.0.0.1:7676/.well-known/oauth-authorization-server',

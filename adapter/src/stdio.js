@@ -70,11 +70,29 @@ export function createStdioAdapter(core, config, {
       && !Array.isArray(payload)
       && !('id' in payload);
 
+    // DevSpace currently implements the initialize-based MCP revisions. The
+    // 2026-07-28 stdio compatibility probe requires a correlated JSON-RPC
+    // error so the caller can downgrade on the same process. Forwarding the
+    // probe upstream before initialize produces DevSpace's id:null session
+    // error, which tunnel-client cannot match to the outstanding request.
+    if (!isNotification && payload?.method === 'server/discover') {
+      log('stdio_legacy_discovery_fallback', {});
+      writeLine(stdout, {
+        jsonrpc: '2.0',
+        id: payload.id ?? null,
+        error: { code: -32601, message: 'Method not found' },
+      });
+      return;
+    }
+
     const result = await core.handle(payload, {
       // No HTTP headers here, so the session learned from DevSpace is used.
       clientSessionId: null,
       clientProtocolVersion: null,
       method: 'POST',
+      // tunnel-client keeps remote connector state across local process
+      // restarts, so tools/call may arrive before a fresh initialize.
+      restoreSession: !isNotification && payload?.method !== 'initialize',
       // Streamable HTTP requires clients to accept both representations.
       // DevSpace rejects an application/json-only request with HTTP 406.
       accept: 'application/json, text/event-stream',

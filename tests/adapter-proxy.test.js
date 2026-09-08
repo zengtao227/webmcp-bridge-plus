@@ -306,6 +306,46 @@ test('forwards the MCP session id returned by DevSpace', async () => {
   }
 });
 
+test('starts every initialize without reusing an earlier MCP session', async () => {
+  const configuredPort = await reserveLoopbackPort();
+  const config = loadAdapterConfig({
+    ADAPTER_TRANSPORT: 'http',
+    ADAPTER_HTTP_TOKEN_REF: 'env:FAKE_ADAPTER_TOKEN',
+    DEVSPACE_UPSTREAM_URL: 'http://127.0.0.1:7676',
+    ADAPTER_PORT: String(configuredPort),
+    DEVSPACE_OWNER_TOKEN_REF: 'env:FAKE_OWNER_TOKEN',
+  });
+  const seenSessions = [];
+  let issuedSession = 0;
+  const core = createAdapterCore(config, {
+    oauthClient: {
+      getAccessToken: async () => 'fake-access-token',
+      invalidate: () => {},
+    },
+    fetchImpl: async (_url, init) => {
+      const payload = JSON.parse(init.body);
+      seenSessions.push(init.headers['mcp-session-id'] ?? null);
+      const headers = { 'content-type': 'application/json' };
+      if (payload.method === 'initialize') {
+        issuedSession += 1;
+        headers['mcp-session-id'] = `session-${issuedSession}`;
+      }
+      return new Response(JSON.stringify({
+        jsonrpc: '2.0',
+        id: payload.id,
+        result: { echoed: payload.method },
+      }), { status: 200, headers });
+    },
+  });
+
+  await core.handle({ jsonrpc: '2.0', id: 1, method: 'initialize' });
+  await core.handle({ jsonrpc: '2.0', id: 2, method: 'initialize' });
+  await core.handle({ jsonrpc: '2.0', id: 3, method: 'tools/list' });
+
+  assert.deepEqual(seenSessions, [null, null, 'session-2']);
+  assert.equal(core.sessionId, 'session-2');
+});
+
 test('the unix transport binds a socket that only the owner can open', async () => {
   const fake = await startFakeDevSpace({ ownerToken: OWNER });
   const dir = await mkdtemp(path.join(tmpdir(), 'webmcp-adapter-'));

@@ -2,11 +2,12 @@ import { createServer } from 'node:http';
 
 const HTML_FORM = '<!doctype html><html><body><form method="post"><input name="owner_token" /></form></body></html>';
 
-function json(res, status, payload) {
+function json(res, status, payload, extraHeaders = {}) {
   const body = JSON.stringify(payload);
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
     'content-length': Buffer.byteLength(body),
+    ...extraHeaders,
   });
   res.end(body);
 }
@@ -39,6 +40,8 @@ export async function startFakeDevSpace({
     rejectedTokens: new Set(),
     mcpCalls: [],
     failNextTokenRequest: false,
+    issueSessions: false,
+    sessionCounter: 0,
   };
 
   const server = createServer(async (req, res) => {
@@ -147,6 +150,11 @@ export async function startFakeDevSpace({
       }
       if (req.method === 'POST') {
         const payload = JSON.parse(raw);
+        const responseHeaders = {};
+        if (payload?.method === 'initialize' && state.issueSessions) {
+          state.sessionCounter += 1;
+          responseHeaders['mcp-session-id'] = `fake-session-${state.sessionCounter}`;
+        }
         const responsePayload = payload?.method === 'tools/call' && state.toolResult
           ? {
             jsonrpc: '2.0',
@@ -163,11 +171,12 @@ export async function startFakeDevSpace({
           res.writeHead(200, {
             'content-type': 'text/event-stream',
             'content-length': Buffer.byteLength(body),
+            ...responseHeaders,
           });
           res.end(body);
           return;
         }
-        json(res, 200, responsePayload);
+        json(res, 200, responsePayload, responseHeaders);
         return;
       }
       res.writeHead(200, { 'content-type': 'application/json' });

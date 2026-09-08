@@ -50,6 +50,16 @@ const SECRET_KEYS = new Set([
   'password',
 ]);
 
+function isJsonRpcError(value) {
+  return value
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && value.jsonrpc === '2.0'
+    && value.error
+    && typeof value.error === 'object'
+    && !Array.isArray(value.error);
+}
+
 // Absolute URLs naming an OAuth endpoint. Deliberately requires a scheme so a
 // plain project path such as /work/app/token is not mangled.
 const OAUTH_ENDPOINT_URL = /https?:\/\/[^\s"'<>]*?\/(?:authorize|token|register|userinfo|introspect|revoke|device\/authorization)(?:[/?#][^\s"'<>]*)?/gi;
@@ -67,7 +77,7 @@ function scrubString(value) {
     .replace(BEARER, '$1[redacted]');
 }
 
-function walk(value) {
+function walk(value, { preserveErrorCode = false } = {}) {
   if (typeof value === 'string') {
     return scrubString(value);
   }
@@ -81,6 +91,17 @@ function walk(value) {
   const out = {};
   for (const [key, child] of Object.entries(value)) {
     const lower = key.toLowerCase();
+    if (key === 'error' && isJsonRpcError(value)) {
+      out[key] = walk(child, { preserveErrorCode: true });
+      continue;
+    }
+    // JSON-RPC error codes are protocol metadata, not OAuth authorization
+    // codes. Preserve only the required integer field at error.code; a string
+    // or a nested data.code stays redacted by the ordinary secret rule.
+    if (lower === 'code' && preserveErrorCode && Number.isInteger(child)) {
+      out[key] = child;
+      continue;
+    }
     if (DROPPED_KEYS.has(lower)) {
       continue;
     }

@@ -48,6 +48,7 @@ function createPipes() {
 }
 
 async function startStdioAdapter(fake, extraEnv = {}) {
+  fake.state.issueSessions = true;
   const config = loadAdapterConfig({
     DEVSPACE_UPSTREAM_URL: fake.url,
     DEVSPACE_OWNER_TOKEN_REF: 'env:FAKE_OWNER_TOKEN',
@@ -76,7 +77,7 @@ async function startStdioAdapter(fake, extraEnv = {}) {
 
 test('stdio is the default transport and exposes no address at all', async () => {
   const fake = await startFakeDevSpace({ ownerToken: OWNER });
-  const { config, pipes, handle } = await startStdioAdapter(fake);
+  const { config, events, pipes, handle } = await startStdioAdapter(fake);
   try {
     assert.equal(config.transport, 'stdio');
     assert.equal(config.socketPath, null);
@@ -87,8 +88,15 @@ test('stdio is the default transport and exposes no address at all', async () =>
 
     assert.equal(response.id, 1);
     assert.equal(response.result.echoed, 'tools/list');
-    assert.equal(fake.state.mcpCalls.length, 1);
-    assert.equal(fake.state.mcpCalls[0].presented, 'at-1');
+    assert.equal(fake.state.mcpCalls.length, 3);
+    assert.equal(fake.state.mcpCalls[2].presented, 'at-1');
+    assert.ok(events.some((entry) => entry.event === 'legacy_session_restored'));
+    assert.deepEqual(
+      fake.state.requests
+        .filter((entry) => entry.path === '/mcp')
+        .map((entry) => JSON.parse(entry.body).method),
+      ['initialize', 'notifications/initialized', 'tools/list'],
+    );
   } finally {
     await handle.close();
     await fake.close();
@@ -104,6 +112,52 @@ test('converts a Streamable HTTP SSE response into stdio JSON-RPC', async () => 
     const response = await reply;
     assert.equal(response.id, 41);
     assert.equal(response.result.echoed, 'tools/list');
+  } finally {
+    await handle.close();
+    await fake.close();
+  }
+});
+
+test('returns a correlated legacy fallback for server/discover before initialize', async () => {
+  const fake = await startFakeDevSpace({ ownerToken: OWNER });
+  const { events, pipes, handle } = await startStdioAdapter(fake);
+  try {
+    const discoveryReply = pipes.next();
+    pipes.send({
+      jsonrpc: '2.0',
+      id: 'openai-mcp-discover',
+      method: 'server/discover',
+      params: {
+        _meta: {
+          'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+          'io.modelcontextprotocol/clientInfo': { name: 'ChatGPT', version: '1' },
+          'io.modelcontextprotocol/clientCapabilities': {},
+        },
+      },
+    });
+    const discovery = await discoveryReply;
+
+    assert.equal(discovery.id, 'openai-mcp-discover');
+    assert.equal(discovery.error.code, -32601);
+    assert.equal(fake.state.mcpCalls.length, 0);
+    assert.ok(events.some((entry) => entry.event === 'stdio_legacy_discovery_fallback'));
+
+    const initializeReply = pipes.next();
+    pipes.send({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'legacy-client', version: '1' },
+      },
+    });
+    const initialized = await initializeReply;
+
+    assert.equal(initialized.id, 1);
+    assert.equal(initialized.result.echoed, 'initialize');
+    assert.equal(fake.state.mcpCalls.length, 1);
   } finally {
     await handle.close();
     await fake.close();
