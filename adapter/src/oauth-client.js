@@ -1,13 +1,8 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { DevSpaceOAuthError } from './errors.js';
+import { readBoundedJson, readBoundedText, fetchWithTimeout } from './bounded.js';
 
-export class DevSpaceOAuthError extends Error {
-  constructor(message, code, options = {}) {
-    super(message, options.cause ? { cause: options.cause } : undefined);
-    this.name = 'DevSpaceOAuthError';
-    this.code = code;
-    this.status = options.status ?? null;
-  }
-}
+export { DevSpaceOAuthError };
 
 const MAX_METADATA_BYTES = 256 * 1024;
 const MAX_AUTHORIZATION_SERVERS = 8;
@@ -45,46 +40,20 @@ function normalizeIssuer(value) {
   return url.toString().replace(/\/+$/, '');
 }
 
-async function readBoundedJson(response, limit = MAX_METADATA_BYTES) {
-  const declared = Number(response.headers.get('content-length'));
-  if (Number.isFinite(declared) && declared > limit) {
-    throw new DevSpaceOAuthError('OAuth metadata exceeds the size limit.', 'METADATA_TOO_LARGE');
-  }
-  const text = await response.text();
-  if (Buffer.byteLength(text, 'utf8') > limit) {
-    throw new DevSpaceOAuthError('OAuth metadata exceeds the size limit.', 'METADATA_TOO_LARGE');
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw new DevSpaceOAuthError('OAuth metadata is not valid JSON.', 'INVALID_METADATA_JSON');
-  }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new DevSpaceOAuthError('OAuth metadata must be a JSON object.', 'INVALID_METADATA');
-  }
-  return parsed;
-}
-
 async function fetchMetadata(fetchImpl, url, timeoutMs) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   let response;
   try {
-    response = await fetchImpl(url, {
+    response = await fetchWithTimeout(fetchImpl, url, {
       method: 'GET',
       headers: { accept: 'application/json' },
       redirect: 'manual',
       cache: 'no-store',
-      signal: controller.signal,
-    });
+    }, timeoutMs);
   } catch (error) {
-    if (error?.name === 'AbortError') {
-      throw new DevSpaceOAuthError('OAuth metadata request timed out.', 'METADATA_TIMEOUT');
+    if (error instanceof DevSpaceOAuthError && error.code === 'REQUEST_TIMEOUT') {
+      throw new DevSpaceOAuthError('OAuth metadata request timed out.', 'METADATA_TIMEOUT', { cause: error });
     }
     throw new DevSpaceOAuthError('OAuth metadata request failed.', 'METADATA_NETWORK_ERROR', { cause: error });
-  } finally {
-    clearTimeout(timeout);
   }
 
   if (response.status >= 300 && response.status < 400) {
@@ -101,7 +70,17 @@ async function fetchMetadata(fetchImpl, url, timeoutMs) {
   if (!contentType.includes('application/json')) {
     throw new DevSpaceOAuthError('OAuth metadata must use application/json.', 'METADATA_CONTENT_TYPE');
   }
-  return readBoundedJson(response);
+  try {
+    return await readBoundedJson(response, MAX_METADATA_BYTES);
+  } catch (error) {
+    if (error instanceof DevSpaceOAuthError && error.code === 'RESPONSE_TOO_LARGE') {
+      throw new DevSpaceOAuthError('OAuth metadata exceeds the size limit.', 'METADATA_TOO_LARGE');
+    }
+    if (error instanceof DevSpaceOAuthError && error.code === 'INVALID_JSON') {
+      throw new DevSpaceOAuthError('OAuth metadata is not valid JSON.', 'INVALID_METADATA_JSON');
+    }
+    throw error;
+  }
 }
 
 export class DevSpaceOAuthClient {
@@ -202,6 +181,26 @@ export class DevSpaceOAuthClient {
     const state = randomUUID();
     const code = await this.#requestAuthorizationCode(metadata, client, pkce, state);
     await this.#exchangeCode(metadata, client, pkce, code);
+  }
+
+  // Every OAuth round trip is time bounded. A peer that never answers must not
+  // hold the adapter open, and a hang here would look like "unavailable" to the
+  // caller with no explanation.
+  async #post(url, headers, body) {
+    try {
+      return await fetchWithTimeout(this.#fetchImpl, url, {
+        method: 'POST',
+        headers,
+        body,
+        redirect: 'manual',
+        cache: 'no-store',
+      }, this.#timeoutMs);
+    } catch (error) {
+      if (error instanceof DevSpaceOAuthError && error.code === 'REQUEST_TIMEOUT') {
+        throw new DevSpaceOAuthError('OAuth request timed out.', 'OAUTH_TIMEOUT', { cause: error });
+      }
+      throw new DevSpaceOAuthError('OAuth request failed.', 'OAUTH_NETWORK_ERROR', { cause: error });
+    }
   }
 
   // Metadata may advertise a public origin that is unreachable from here
@@ -317,27 +316,24 @@ export class DevSpaceOAuthClient {
       );
     }
 
-    const response = await this.#fetchImpl(this.#toUpstream(metadata.registrationEndpoint), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', accept: 'application/json' },
-      body: JSON.stringify({
-        client_name: this.#options.clientName,
-        redirect_uris: [this.#options.redirectUri],
-        grant_types: ['authorization_code', 'refresh_token'],
-        response_types: ['code'],
-        token_endpoint_auth_method: 'none',
-        scope: this.#options.scopes.join(' '),
-      }),
-      redirect: 'manual',
-      cache: 'no-store',
-    });
+    const response = await this.#post(this.#toUpstream(metadata.registrationEndpoint), {
+      'content-type': 'application/json',
+      accept: 'application/json',
+    }, JSON.stringify({
+      client_name: this.#options.clientName,
+      redirect_uris: [this.#options.redirectUri],
+      grant_types: ['authorization_code', 'refresh_token'],
+      response_types: ['code'],
+      token_endpoint_auth_method: 'none',
+      scope: this.#options.scopes.join(' '),
+    }));
 
     if (!response.ok) {
       throw new DevSpaceOAuthError('Dynamic client registration failed.', 'REGISTRATION_FAILED', {
         status: response.status,
       });
     }
-    const body = await readBoundedJson(response);
+    const body = await readBoundedJson(response, MAX_METADATA_BYTES);
     if (typeof body.client_id !== 'string' || body.client_id.length === 0) {
       throw new DevSpaceOAuthError('Registration response has no client_id.', 'REGISTRATION_INVALID');
     }
@@ -359,16 +355,10 @@ export class DevSpaceOAuthClient {
       owner_token: this.#options.ownerToken,
     });
 
-    const response = await this.#fetchImpl(this.#toUpstream(metadata.authorizationEndpoint), {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/x-www-form-urlencoded',
-        accept: 'text/html,application/json',
-      },
-      body: body.toString(),
-      redirect: 'manual',
-      cache: 'no-store',
-    });
+    const response = await this.#post(this.#toUpstream(metadata.authorizationEndpoint), {
+      'content-type': 'application/x-www-form-urlencoded',
+      accept: 'text/html,application/json',
+    }, body.toString());
 
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get('location');
@@ -381,7 +371,12 @@ export class DevSpaceOAuthClient {
       if (!code) {
         throw new DevSpaceOAuthError('Authorization redirect has no code.', 'AUTHORIZATION_NO_CODE');
       }
-      if (returnedState !== null && returnedState !== state) {
+      // A missing state is not acceptable: it is the only thing binding this
+      // response to the request we made.
+      if (returnedState === null) {
+        throw new DevSpaceOAuthError('Authorization redirect has no state.', 'STATE_MISSING');
+      }
+      if (returnedState !== state) {
         throw new DevSpaceOAuthError('Authorization state mismatch.', 'STATE_MISMATCH');
       }
       return code;
@@ -405,23 +400,17 @@ export class DevSpaceOAuthClient {
       ...params,
     });
 
-    const response = await this.#fetchImpl(this.#toUpstream(metadata.tokenEndpoint), {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/x-www-form-urlencoded',
-        accept: 'application/json',
-      },
-      body: body.toString(),
-      redirect: 'manual',
-      cache: 'no-store',
-    });
+    const response = await this.#post(this.#toUpstream(metadata.tokenEndpoint), {
+      'content-type': 'application/x-www-form-urlencoded',
+      accept: 'application/json',
+    }, body.toString());
 
     if (!response.ok) {
       throw new DevSpaceOAuthError('Token request was rejected.', 'TOKEN_REQUEST_FAILED', {
         status: response.status,
       });
     }
-    const payload = await readBoundedJson(response);
+    const payload = await readBoundedJson(response, MAX_METADATA_BYTES);
     if (typeof payload.access_token !== 'string' || payload.access_token.length === 0) {
       throw new DevSpaceOAuthError('Token response has no access_token.', 'TOKEN_RESPONSE_INVALID');
     }

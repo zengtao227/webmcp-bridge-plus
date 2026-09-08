@@ -174,6 +174,89 @@ test('rejects an authorization redirect whose state does not match', async () =>
   }
 });
 
+test('rejects an authorization redirect that carries no state at all', async () => {
+  const fake = await startFakeDevSpace({ ownerToken: OWNER });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).endsWith('/authorize')) {
+      return new Response(null, {
+        status: 302,
+        headers: { location: 'http://127.0.0.1:8787/oauth/callback?code=code-1' },
+      });
+    }
+    return originalFetch(url, init);
+  };
+  try {
+    const client = makeClient(fake);
+    await assert.rejects(
+      () => client.getAccessToken(),
+      (error) => error instanceof DevSpaceOAuthError && error.code === 'STATE_MISSING',
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    await fake.close();
+  }
+});
+
+test('bounds metadata reads so a hostile authorization server cannot stream forever', async () => {
+  const fake = await startFakeDevSpace({ ownerToken: OWNER });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes('oauth-authorization-server')) {
+      const chunk = 'x'.repeat(64 * 1024);
+      const stream = new ReadableStream({
+        pull(controller) {
+          // Never closes.
+          controller.enqueue(new TextEncoder().encode(chunk));
+        },
+      });
+      return new Response(stream, {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    return originalFetch(url, init);
+  };
+  try {
+    const client = makeClient(fake);
+    await assert.rejects(
+      () => client.getAccessToken(),
+      (error) => error instanceof DevSpaceOAuthError
+        && ['METADATA_TOO_LARGE', 'METADATA_TIMEOUT'].includes(error.code),
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    await fake.close();
+  }
+});
+
+test('times out when DevSpace never answers the token endpoint', async () => {
+  const fake = await startFakeDevSpace({ ownerToken: OWNER });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).endsWith('/token')) {
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          const error = new Error('The operation was aborted');
+          error.name = 'AbortError';
+          reject(error);
+        });
+      });
+    }
+    return originalFetch(url, init);
+  };
+  try {
+    const client = makeClient(fake, { timeoutMs: 50 });
+    await assert.rejects(
+      () => client.getAccessToken(),
+      (error) => error instanceof DevSpaceOAuthError && error.code === 'OAUTH_TIMEOUT',
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    await fake.close();
+  }
+});
+
 test('concurrent callers share a single authorization round trip', async () => {
   const fake = await startFakeDevSpace({ ownerToken: OWNER });
   try {

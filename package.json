@@ -1,0 +1,16 @@
+{
+  "name": "webmcp-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A least-privilege bridge between DeepSeek Web and remote MCP tools with deterministic secret filtering.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test",
+    "lint": "node scripts/check-js.mjs",
+    "build": "node scripts/build.mjs",
+    "check": "npm run lint && npm test && npm run build"
+  }
+}

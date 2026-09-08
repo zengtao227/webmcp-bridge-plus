@@ -14,13 +14,76 @@ test('defaults to a loopback-only listener', () => {
   assert.equal(config.mcpPath, '/mcp');
 });
 
-test('rejects binding beyond loopback', () => {
+test('defaults to stdio, so the adapter has no address to attack', () => {
+  const config = loadAdapterConfig({ ...BASE });
+  assert.equal(config.transport, 'stdio');
+  assert.equal(config.socketPath, null);
+  assert.equal(config.httpTokenRef, null);
+});
+
+test('refuses the http transport without a token, because loopback is not authorization', () => {
   assert.throws(
-    () => loadAdapterConfig({ ...BASE, ADAPTER_LISTEN_HOST: '0.0.0.0' }),
+    () => loadAdapterConfig({ ...BASE, ADAPTER_TRANSPORT: 'http' }),
+    (error) => error instanceof AdapterConfigError && error.code === 'HTTP_TOKEN_REQUIRED',
+  );
+  const ok = loadAdapterConfig({
+    ...BASE,
+    ADAPTER_TRANSPORT: 'http',
+    ADAPTER_HTTP_TOKEN_REF: 'env:ADAPTER_TOKEN',
+  });
+  assert.equal(ok.transport, 'http');
+  assert.equal(ok.httpTokenRef, 'env:ADAPTER_TOKEN');
+});
+
+test('requires an absolute socket path for the unix transport', () => {
+  for (const socketPath of ['', 'relative.sock', './tmp/a.sock']) {
+    assert.throws(
+      () => loadAdapterConfig({ ...BASE, ADAPTER_TRANSPORT: 'unix', ADAPTER_SOCKET_PATH: socketPath }),
+      (error) => error instanceof AdapterConfigError && error.code === 'INVALID_SOCKET_PATH',
+    );
+  }
+  assert.equal(
+    loadAdapterConfig({
+      ...BASE,
+      ADAPTER_TRANSPORT: 'unix',
+      ADAPTER_SOCKET_PATH: '/tmp/webmcp/adapter.sock',
+    }).socketPath,
+    '/tmp/webmcp/adapter.sock',
+  );
+});
+
+test('rejects an unknown transport', () => {
+  assert.throws(
+    () => loadAdapterConfig({ ...BASE, ADAPTER_TRANSPORT: 'funnel' }),
+    (error) => error instanceof AdapterConfigError && error.code === 'INVALID_TRANSPORT',
+  );
+});
+
+test('refuses to send the owner token over plaintext http to a non-loopback peer', () => {
+  assert.throws(
+    () => loadAdapterConfig({ ...BASE, DEVSPACE_UPSTREAM_URL: 'http://devspace.internal:7676' }),
+    (error) => error instanceof AdapterConfigError && error.code === 'PLAINTEXT_UPSTREAM_FORBIDDEN',
+  );
+  // Loopback plaintext is acceptable: the bytes never leave the machine.
+  assert.equal(
+    loadAdapterConfig({ ...BASE, DEVSPACE_UPSTREAM_URL: 'http://127.0.0.1:7676' }).upstreamBaseUrl,
+    'http://127.0.0.1:7676',
+  );
+  // A remote peer is fine as long as it is TLS.
+  assert.equal(
+    loadAdapterConfig({ ...BASE, DEVSPACE_UPSTREAM_URL: 'https://devspace.internal:7676' }).upstreamBaseUrl,
+    'https://devspace.internal:7676',
+  );
+});
+
+test('rejects binding beyond loopback for the http transport', () => {
+  const base = { ...BASE, ADAPTER_TRANSPORT: 'http', ADAPTER_HTTP_TOKEN_REF: 'env:X' };
+  assert.throws(
+    () => loadAdapterConfig({ ...base, ADAPTER_LISTEN_HOST: '0.0.0.0' }),
     (error) => error instanceof AdapterConfigError && error.code === 'NON_LOOPBACK_BIND',
   );
   assert.throws(
-    () => loadAdapterConfig({ ...BASE, ADAPTER_LISTEN_HOST: '192.168.1.10' }),
+    () => loadAdapterConfig({ ...base, ADAPTER_LISTEN_HOST: '192.168.1.10' }),
     (error) => error instanceof AdapterConfigError && error.code === 'NON_LOOPBACK_BIND',
   );
 });

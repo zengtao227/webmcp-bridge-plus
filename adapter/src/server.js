@@ -1,8 +1,17 @@
+// http and unix transports.
+//
+// These exist for local debugging and for callers that cannot use stdio. They
+// are NOT the default, and the http transport refuses to start without a bearer
+// token: loopback is not authorization, and every local process can reach a
+// loopback port.
+
 import { createServer } from 'node:http';
+import { timingSafeEqual } from 'node:crypto';
 
 const ALLOWED_METHODS = new Set(['POST', 'GET', 'DELETE']);
 const LOOPBACK_REMOTES = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
-const DEFAULT_ACCEPT = 'application/json, text/event-stream';
+const SESSION_HEADER = 'mcp-session-id';
+const PROTOCOL_HEADER = 'mcp-protocol-version';
 
 function normalizeRemoteAddress(value) {
   if (typeof value !== 'string') {
@@ -54,138 +63,53 @@ function sendJson(res, status, payload) {
   res.end(body);
 }
 
-function upstreamTarget(config, search) {
-  return new URL(`${config.mcpPath}${search ?? ''}`, `${config.upstreamBaseUrl}/`).toString();
-}
-
-function buildUpstreamHeaders(req, token, hasBody) {
-  const headers = {
-    accept: req.headers.accept ?? DEFAULT_ACCEPT,
-    authorization: `Bearer ${token}`,
+export function createTokenVerifier(token) {
+  const expected = Buffer.from(token, 'utf8');
+  return (presented) => {
+    if (typeof presented !== 'string') {
+      return false;
+    }
+    const actual = Buffer.from(presented, 'utf8');
+    if (actual.length !== expected.length) {
+      return false;
+    }
+    try {
+      return timingSafeEqual(actual, expected);
+    } catch {
+      return false;
+    }
   };
-  if (hasBody) {
-    headers['content-type'] = 'application/json';
-  }
-  // MCP Streamable HTTP keeps sessions alive through these headers.
-  for (const name of ['mcp-session-id', 'mcp-protocol-version', 'last-event-id']) {
-    const value = req.headers[name];
-    if (typeof value === 'string' && value.length > 0 && value.length <= 4096) {
-      headers[name] = value;
-    }
-  }
-  return headers;
 }
 
-async function pipeBounded(response, res, limit, log) {
-  const declared = Number(response.headers.get('content-length'));
-  if (Number.isFinite(declared) && declared > limit) {
-    log('upstream_response_too_large', { declared });
-    return false;
+function presentedToken(req) {
+  const header = req.headers.authorization;
+  if (typeof header !== 'string') {
+    return null;
   }
-  if (!response.body) {
-    res.end();
-    return true;
-  }
-
-  const reader = response.body.getReader();
-  let bytes = 0;
-  try {
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) {
-        break;
-      }
-      bytes += value.byteLength;
-      if (bytes > limit) {
-        await reader.cancel();
-        log('upstream_response_truncated', { limit });
-        return false;
-      }
-      res.write(value);
-    }
-  } finally {
-    reader.releaseLock?.();
-  }
-  res.end();
-  return true;
+  const match = /^Bearer (.+)$/i.exec(header.trim());
+  return match ? match[1] : null;
 }
 
-export function createAdapterServer(config, {
-  oauthClient,
+export function createAdapterServer(core, config, {
   log = () => {},
-  fetchImpl = globalThis.fetch,
+  verifyToken = null,
+  requireToken = false,
 } = {}) {
-  if (!oauthClient || typeof oauthClient.getAccessToken !== 'function') {
-    throw new Error('createAdapterServer requires an oauth client.');
-  }
-
-  async function forward(req, res, body, allowRetry) {
-    let token;
-    try {
-      token = await oauthClient.getAccessToken();
-    } catch (error) {
-      log('auth_failed', { code: error.code ?? 'UNKNOWN' });
-      sendJson(res, 502, { error: 'upstream_auth_unavailable' });
-      return;
-    }
-
-    const url = new URL(req.url ?? '/', `http://${config.listenHost}`);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), config.upstreamTimeoutMs);
-
-    let response;
-    try {
-      response = await fetchImpl(upstreamTarget(config, url.search), {
-        method: req.method,
-        headers: buildUpstreamHeaders(req, token, body !== null),
-        body: body ?? undefined,
-        redirect: 'manual',
-        cache: 'no-store',
-        signal: controller.signal,
-      });
-    } catch (error) {
-      clearTimeout(timeout);
-      log('upstream_unreachable', { code: error?.name ?? 'UNKNOWN' });
-      sendJson(res, 502, { error: 'upstream_unavailable' });
-      return;
-    }
-
-    if (response.status === 401 && allowRetry) {
-      clearTimeout(timeout);
-      // The container may have restarted and dropped its token store.
-      oauthClient.invalidate();
-      log('upstream_unauthorized_retry', {});
-      await forward(req, res, body, false);
-      return;
-    }
-
-    const outHeaders = { 'cache-control': 'no-store' };
-    const contentType = response.headers.get('content-type');
-    if (contentType) {
-      outHeaders['content-type'] = contentType;
-    }
-    const sessionId = response.headers.get('mcp-session-id');
-    if (sessionId) {
-      outHeaders['mcp-session-id'] = sessionId;
-    }
-    res.writeHead(response.status, outHeaders);
-    try {
-      const ok = await pipeBounded(response, res, config.maxResponseBytes, log);
-      if (!ok) {
-        res.destroy();
-      }
-    } finally {
-      clearTimeout(timeout);
-    }
+  if (requireToken && typeof verifyToken !== 'function') {
+    throw new Error('The http transport requires a token verifier.');
   }
 
   const server = createServer((req, res) => {
-    const remote = normalizeRemoteAddress(req.socket?.remoteAddress);
-    if (!LOOPBACK_REMOTES.has(remote)) {
-      // Bound to loopback already; this is defence in depth, not the primary control.
-      log('non_loopback_remote_rejected', { remote });
-      sendJson(res, 403, { error: 'forbidden' });
-      return;
+    // A unix socket has no remote address: the 0600 mode on the socket file is
+    // the whole boundary there, so there is nothing to check.
+    if (config.transport !== 'unix') {
+      const remote = normalizeRemoteAddress(req.socket?.remoteAddress);
+      if (!LOOPBACK_REMOTES.has(remote)) {
+        // Bound to loopback already; this is defence in depth, not the primary control.
+        log('non_loopback_remote_rejected', { remote });
+        sendJson(res, 403, { error: 'forbidden' });
+        return;
+      }
     }
 
     const url = new URL(req.url ?? '/', `http://${config.listenHost}`);
@@ -195,7 +119,18 @@ export function createAdapterServer(config, {
         sendJson(res, 405, { error: 'method_not_allowed' });
         return;
       }
-      sendJson(res, 200, { status: 'ok', authenticated: oauthClient.hasToken });
+      sendJson(res, 200, {
+        status: 'ok',
+        transport: config.transport,
+        authenticated: core.authenticated === true,
+      });
+      return;
+    }
+
+    // Loopback does not identify a caller, so a token is mandatory here.
+    if (requireToken && !verifyToken(presentedToken(req))) {
+      log('unauthorized_request', { path: url.pathname });
+      sendJson(res, 401, { error: 'unauthorized' });
       return;
     }
 
@@ -212,27 +147,44 @@ export function createAdapterServer(config, {
 
     Promise.resolve()
       .then(async () => {
-        let body = null;
+        let parsed = null;
         if (req.method === 'POST') {
           const contentType = (req.headers['content-type'] ?? '').toLowerCase();
           if (!contentType.includes('application/json')) {
             sendJson(res, 415, { error: 'unsupported_media_type' });
             return;
           }
+          let raw;
           try {
-            body = await readBoundedBody(req, config.maxRequestBytes);
+            raw = await readBoundedBody(req, config.maxRequestBytes);
           } catch {
             sendJson(res, 413, { error: 'request_too_large' });
             return;
           }
           try {
-            JSON.parse(body.toString('utf8'));
+            parsed = JSON.parse(raw.toString('utf8'));
           } catch {
             sendJson(res, 400, { error: 'invalid_json' });
             return;
           }
         }
-        await forward(req, res, body, true);
+
+        const result = await core.handle(parsed, {
+          clientSessionId: req.headers[SESSION_HEADER] ?? null,
+          clientProtocolVersion: req.headers[PROTOCOL_HEADER] ?? null,
+          method: req.method,
+        });
+
+        const headers = { 'cache-control': 'no-store' };
+        headers['content-type'] = result.contentType === 'sse'
+          ? 'text/event-stream'
+          : 'application/json; charset=utf-8';
+        if (core.sessionId) {
+          headers[SESSION_HEADER] = core.sessionId;
+        }
+        const body = Buffer.from(result.body ?? '', 'utf8');
+        res.writeHead(result.status, { ...headers, 'content-length': body.byteLength });
+        res.end(body);
       })
       .catch((error) => {
         log('request_failed', { code: error?.code ?? 'UNKNOWN' });
@@ -246,3 +198,5 @@ export function createAdapterServer(config, {
 
   return server;
 }
+
+export { ALLOWED_METHODS, LOOPBACK_REMOTES };

@@ -26,8 +26,10 @@ export async function startFakeDevSpace({
   resource = null,
   advertiseRegistration = true,
   advertisedIssuer = null,
+  toolResult = null,
 } = {}) {
   const state = {
+    toolResult,
     requests: [],
     registeredClients: [],
     tokenCounter: 0,
@@ -144,6 +146,14 @@ export async function startFakeDevSpace({
       }
       if (req.method === 'POST') {
         const payload = JSON.parse(raw);
+        if (payload?.method === 'tools/call' && state.toolResult) {
+          json(res, 200, {
+            jsonrpc: '2.0',
+            id: payload?.id ?? null,
+            result: state.toolResult,
+          });
+          return;
+        }
         json(res, 200, {
           jsonrpc: '2.0',
           id: payload?.id ?? null,
