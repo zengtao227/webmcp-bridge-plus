@@ -40,6 +40,40 @@ Mac Mini
 
 调用 ChatGPT 的终端设备不决定执行位置；项目注册表决定执行 host。
 
+## 路由不变量（V2.2 明确规则）
+
+用户永远只说项目名，**不说 host、不说文件夹名**（如 `MyCode` / `Code`）。
+
+解析结果只有三种：
+
+- **Unique → execute**：恰好一个已注册项目匹配，自动执行。
+- **Ambiguous → ask**：多个已注册项目/别名都可能匹配，停下来列出候选并请用户选择；绝不猜测，不偏向当前 host / 最近使用 / 字母序 / 在线状态 / 名字相近。
+- **Missing → fail closed**：零匹配，停止并报告项目未找到；绝不扫描任意文件系统、绝不替换相似项目、绝不 fallback 到另一台 host。
+
+注册表位置（仓库侧，数据-only）：
+
+```yaml
+config/devspace-projects.yaml
+```
+
+它包含 `hosts` 与 `projects`；每个 project 映射到唯一 host，path 必须在该 host 的 `approvedRoot` 之内。不含密钥、不含运行时 token、不含 `workspaceId`。
+
+## 回归：未知项目不得创建目录（V2.2 Phase 1 修复）
+
+真实 E2E 发现缺陷：未知项目名 `definitely-not-a-real-project` 被归一化后合成
+`/work/My code/definitely-not-a-real-project`，并调用 `open_workspace`，导致 DevSpace
+在该路径创建了一个空目录。`Missing → fail closed` 因此失效。
+
+修复（V2.2 路由基础）：
+
+- 注册表可用 + 唯一匹配 → 执行；
+- 注册表可用 + 歧义匹配 → 询问用户；
+- 注册表可用 + 零匹配 → 失败关闭；
+- **注册表不可用 → 失败关闭**，绝不回退到 `/work/My code/<归一化名>`。
+
+`open_workspace` 只接受来自显式已注册项目条目的路径；归一化仅用于匹配 canonical id / 别名，绝不生成可执行路径。处理未知项目前后，必须确认
+`/work/My code/definitely-not-a-real-project` 未被路由流程创建。
+
 ## 概念模型
 
 ```text
@@ -181,7 +215,7 @@ code@macbook-pro
 4. Mac Mini 的 approved root 应采用什么稳定容器路径；
 5. host offline 时 ChatGPT 会收到什么错误，如何保持 fail-closed；
 6. workspaceId 是否只在单一 backend/session 内有意义，切 host 时如何避免误复用；
-7. registry 放在 Plugin Skill、独立配置文件还是其他最小可审计位置最合适；
+7. registry 存放位置（已决定）：仓库 canonical registry = `config/devspace-projects.yaml`；当前 ChatGPT online Skill = 内嵌、已同步的 registry snapshot（复制进 `SKILL.md`）；在线 Skill 不直接读取本 YAML。未来若产品支持随 Skill 一起发布 registry，可消除这份重复。
 8. 多 host 情况下如何让用户仍然只看到一个自然语言入口，例如 `@DevSpace`。
 
 ## 验收目标

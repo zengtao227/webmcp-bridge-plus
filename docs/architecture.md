@@ -275,3 +275,37 @@ As of 2026-09-08, the current path has been validated with:
 - DevSpace published only on `127.0.0.1:7676`.
 
 For detailed operational evidence, see the evals under `.agent/evals/` and the private Tunnel runbook.
+
+## 7. V2.2 planned routing (foundation)
+
+V2.2 adds multi-host execution behind the same natural-language entry. The
+repository-side foundation is an explicit, data-only registry:
+
+```text
+project identity
+   ↓
+explicit registry (config/devspace-projects.yaml)
+   ↓
+host/app
+   ↓
+approved path
+```
+
+The routing Skill resolves a project name to a registry entry, then to the
+registered path, then calls the existing `open_workspace` on the already-connected
+DevSpace backend. The `app` field in the registry is routing/planned metadata for
+future multi-host App selection, not a callable identifier today. The mandatory
+invariant is:
+
+```text
+Unique -> execute
+Ambiguous -> ask
+Missing -> fail closed
+```
+
+This phase does not change the V2.0/V2.1 runtime, the adapter, the Tunnel, the
+Secret Firewall, OAuth, Docker, or any MCP tool schema. The current single-host
+deployment uses the already-connected DevSpace backend; per-host App/backend
+selection requires the registered `app` value and is actionable only after V2.2
+multi-App routing is validated live — that capability is not yet
+proven live and is documented, not implemented.

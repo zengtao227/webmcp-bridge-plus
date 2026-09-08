@@ -1,0 +1,39 @@
+# DevSpace multi-host project registry — V2.2 Phase 1 foundation
+#
+# Data-only. No secrets, no runtime tokens, no Tunnel API keys, no workspaceId.
+# Canonical host IDs and canonical project IDs MUST be unique.
+# Each project maps to exactly ONE registered host.
+# Each project path MUST be inside that host's approvedRoot.
+# No filesystem discovery. No fallback host. Fail closed on ambiguity / missing.
+#
+# config/devspace-projects.yaml = repository canonical registry.
+# The standalone ChatGPT online Skill uses a synchronized embedded snapshot
+# (copied into SKILL.md). The online Skill does NOT read this YAML directly.
+# This file does NOT change the live V2.1 runtime by itself.
+
+version: 1
+
+hosts:
+  macbook-pro:
+    # app: routing/planned metadata only (see docs). The current single-host
+    # deployment uses the already-connected DevSpace backend; do NOT attempt to
+    # invoke or switch to an App named "devspace-macbook-pro".
+    app: devspace-macbook-pro
+    approvedRoot: "/work/My code"
+
+  # Future host — EXAMPLE ONLY, not yet deployed. Do not treat as live.
+  # mac-mini:
+  #   app: devspace-mac-mini
+  #   approvedRoot: "/work/Code"
+
+projects:
+  webmcp-bridge:
+    host: macbook-pro
+    path: "/work/My code/webmcp-bridge"
+    aliases:
+      - "webmcp bridge"
+      - "WebMCP Bridge"
+
+  brand-production-studio:
+    host: macbook-pro
+    path: "/work/My code/brand-production-studio"

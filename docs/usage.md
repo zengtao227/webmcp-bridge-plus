@@ -248,3 +248,23 @@ skills/devspace-project-router/SKILL.md
 如果是重要修改，再加一句：
 
 > **先分析和给方案，批准后才能改；改完先 review，再 commit；commit 再 review，最后 push。**
+
+## 9. 未来：V2.2 多 host 路由（规划中，尚未上线）
+
+V2.2 的目标是不用改你现在的说法，但底层能自动选 host。
+
+例如未来可能这样（当前仍是单 host，请勿当作已上线）：
+
+```text
+@DevSpace 去 trading-engine 看一下当前修改
+```
+
+你仍然只需要说项目名 `trading-engine`，**不需要知道它在 MacBook Pro 还是 Mac Mini，也不需要知道它的父文件夹是 `My code` 还是 `Code`**。路由层根据项目注册表决定 host 和路径：
+
+```text
+trading-engine  →  注册表  →  host/app  →  该 host 的批准路径
+```
+
+当前 V2.1 只在一台 MacBook Pro 上工作；多 host 选择需要每台 host 各自注册的 DevSpace App/backend，该能力尚未在真实环境验证。在它上线之前，Mac Mini 等第二台 host 不应被当作可用。
+
+无论 V2.1 还是 V2.2，未知项目名（如 `definitely-not-a-real-project`）都必须**失败关闭**：路由层绝不调用 `open_workspace`，也绝不凭空创建目录。`open_workspace` 只接受来自已注册项目条目的路径。
