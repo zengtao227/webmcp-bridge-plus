@@ -5,12 +5,18 @@
 // cannot be bypassed by choosing a different transport.
 
 import { authorizeRequest, firewallResponse, deniedToolResult, FirewallError } from './firewall.js';
+import { scrubAuthMetadata, localErrorEnvelope } from './sanitize.js';
 import { DevSpaceOAuthError } from './errors.js';
 import { readBoundedText } from './bounded.js';
 
 const DEFAULT_ACCEPT = 'application/json, text/event-stream';
 const SESSION_HEADER = 'mcp-session-id';
 const PROTOCOL_HEADER = 'mcp-protocol-version';
+
+// DevSpace answers these when *we* are not authenticated. They describe our
+// local credential exchange, so they are terminal here: never forwarded, and
+// never surfaced as a 401 the remote caller could mistake for an OAuth prompt.
+const AUTH_CHALLENGE_STATUSES = new Set([401, 403]);
 
 function upstreamTarget(config) {
   return new URL(config.mcpPath, `${config.upstreamBaseUrl}/`).toString();
@@ -95,6 +101,9 @@ export function createAdapterCore(config, {
       return { status: 502, payload: { error: 'upstream_auth_unavailable' }, contentType: 'json' };
     }
     authenticated = true;
+    // The token is ours and lives only in this process; make sure it can never
+    // appear in a log line even if something downstream stringifies a request.
+    log.addSecret?.(token);
 
     const headers = {
       accept,
@@ -138,6 +147,20 @@ export function createAdapterCore(config, {
         method, body, clientSessionId, clientProtocolVersion, allowRetry: false, accept,
       });
     }
+
+    // DevSpace is telling *us* it does not accept our credential. Answering 401
+    // to the remote caller would invite it to start an OAuth flow against a
+    // loopback endpoint it can never reach, and the challenge body would carry
+    // our authorization server URL. Terminate it here instead.
+    if (AUTH_CHALLENGE_STATUSES.has(response.status)) {
+      clearTimeout(timeout);
+      oauthClient.invalidate();
+      log('upstream_auth_rejected', { status: response.status });
+      return { status: 502, payload: { error: 'upstream_auth_rejected' }, contentType: 'json' };
+    }
+
+    // Upstream headers are never copied forward, so WWW-Authenticate cannot
+    // leak even by accident; only the session id is carried across.
 
     const upstreamSession = response.headers.get(SESSION_HEADER);
     if (upstreamSession) {
@@ -189,7 +212,7 @@ export function createAdapterCore(config, {
           log('upstream_event_unparsable', {});
           continue;
         }
-        const result = firewallResponse(parsed, requestedPath);
+        const result = firewallResponse(scrubAuthMetadata(parsed), requestedPath);
         blocked += result.blocked;
         redacted += result.redacted;
         rebuilt.push({ event: entry.event, payload: result.payload });
@@ -213,7 +236,7 @@ export function createAdapterCore(config, {
       log('upstream_body_unparsable', {});
       return null;
     }
-    const result = firewallResponse(parsed, requestedPath);
+    const result = firewallResponse(scrubAuthMetadata(parsed), requestedPath);
     if (result.blocked > 0 || result.redacted > 0) {
       log('firewall_applied', result);
     }
@@ -259,8 +282,13 @@ export function createAdapterCore(config, {
     });
 
     if (upstream.contentType === 'json' && upstream.payload) {
-      // A locally generated failure (auth, unreachable, oversized).
-      return { status: upstream.status, contentType: 'json', body: JSON.stringify(upstream.payload) };
+      // A locally generated failure (auth rejected, unreachable, oversized).
+      // Never 401: the caller has no way to satisfy a local challenge.
+      return {
+        status: upstream.status,
+        contentType: 'json',
+        body: JSON.stringify(localErrorEnvelope(payload.id, upstream.payload.error)),
+      };
     }
 
     let filtered;
@@ -275,14 +303,18 @@ export function createAdapterCore(config, {
       return {
         status: 502,
         contentType: 'json',
-        body: JSON.stringify({ error: 'policy_enforcement_failed' }),
+        body: JSON.stringify(localErrorEnvelope(payload.id, 'policy_enforcement_failed')),
       };
     }
 
     if (filtered === null) {
       // Unclassified payload: never forward what we cannot inspect.
       log('upstream_payload_unclassified', { contentType: upstream.contentType });
-      return { status: 502, contentType: 'json', body: JSON.stringify({ error: 'upstream_payload_unclassified' }) };
+      return {
+        status: 502,
+        contentType: 'json',
+        body: JSON.stringify(localErrorEnvelope(payload.id, 'upstream_payload_unclassified')),
+      };
     }
 
     return {

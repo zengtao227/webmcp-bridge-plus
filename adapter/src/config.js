@@ -54,11 +54,13 @@ function parsePort(value) {
 }
 
 /**
- * Parse a URL and enforce the transport policy: plaintext http is acceptable
- * only for a loopback peer. Anything else must be TLS, because the OAuth owner
- * token is posted to this origin.
+ * Parse a URL and enforce the transport policy.
+ *
+ * The DevSpace upstream must be loopback, full stop: the adapter posts the owner
+ * credential to it, so a remote origin would mean the credential leaves this
+ * machine. TLS is not a substitute for staying local.
  */
-function parseUrl(value, code, { requireTls = false } = {}) {
+function parseUrl(value, code, { requireLoopback = false } = {}) {
   if (typeof value !== 'string' || value.length === 0 || value.length > 4096) {
     throw new AdapterConfigError(`A bounded URL is required (${code}).`, code);
   }
@@ -74,13 +76,10 @@ function parseUrl(value, code, { requireTls = false } = {}) {
   if (url.username || url.password) {
     throw new AdapterConfigError(`URL must not contain credentials (${code}).`, code);
   }
-  if (requireTls && url.protocol !== 'https:') {
-    throw new AdapterConfigError(`URL must use https (${code}).`, code);
-  }
-  if (url.protocol === 'http:' && !isLoopbackHost(url.hostname)) {
+  if (requireLoopback && !isLoopbackHost(url.hostname)) {
     throw new AdapterConfigError(
-      `Plaintext http is allowed only for loopback peers; use https for ${url.hostname} (${code}).`,
-      'PLAINTEXT_UPSTREAM_FORBIDDEN',
+      `The DevSpace upstream must be on loopback so credentials never leave this machine (${code}).`,
+      'NON_LOOPBACK_UPSTREAM',
     );
   }
   return url;
@@ -173,6 +172,7 @@ export function loadAdapterConfig(env = process.env) {
   const upstreamBaseUrl = parseUrl(
     env.DEVSPACE_UPSTREAM_URL ?? 'http://127.0.0.1:7676',
     'INVALID_UPSTREAM_URL',
+    { requireLoopback: true },
   );
   const mcpPath = normalizePath(env.DEVSPACE_MCP_PATH ?? '/mcp');
   const upstreamMcpUrl = new URL(mcpPath, upstreamBaseUrl).toString();

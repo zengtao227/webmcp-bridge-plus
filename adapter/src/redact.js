@@ -43,8 +43,14 @@ export function createRedactor(literals = []) {
 }
 
 export function createLogger({ redactor = createRedactor(), write = (line) => process.stdout.write(`${line}\n`) } = {}) {
-  return function log(event, fields = {}) {
+  function log(event, fields = {}) {
     const entry = { ts: new Date().toISOString(), event, ...fields };
     write(redactor.redact(JSON.stringify(entry)));
-  };
+  }
+
+  // A credential discovered at run time (a DevSpace access token) must be
+  // redacted from every later line, not just the ones we anticipated.
+  log.addSecret = (secret) => redactor.addSecret(secret);
+
+  return log;
 }

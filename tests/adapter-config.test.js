@@ -59,21 +59,28 @@ test('rejects an unknown transport', () => {
   );
 });
 
-test('refuses to send the owner token over plaintext http to a non-loopback peer', () => {
-  assert.throws(
-    () => loadAdapterConfig({ ...BASE, DEVSPACE_UPSTREAM_URL: 'http://devspace.internal:7676' }),
-    (error) => error instanceof AdapterConfigError && error.code === 'PLAINTEXT_UPSTREAM_FORBIDDEN',
-  );
-  // Loopback plaintext is acceptable: the bytes never leave the machine.
-  assert.equal(
-    loadAdapterConfig({ ...BASE, DEVSPACE_UPSTREAM_URL: 'http://127.0.0.1:7676' }).upstreamBaseUrl,
-    'http://127.0.0.1:7676',
-  );
-  // A remote peer is fine as long as it is TLS.
-  assert.equal(
-    loadAdapterConfig({ ...BASE, DEVSPACE_UPSTREAM_URL: 'https://devspace.internal:7676' }).upstreamBaseUrl,
+test('requires the DevSpace upstream to be loopback, so credentials never leave this machine', () => {
+  // TLS is not a substitute for staying local: the adapter posts the owner
+  // credential to this origin, so even https to a remote host is refused.
+  for (const upstream of [
+    'http://devspace.internal:7676',
     'https://devspace.internal:7676',
-  );
+    'https://taos-macbook-pro.tail47500.ts.net',
+  ]) {
+    assert.throws(
+      () => loadAdapterConfig({ ...BASE, DEVSPACE_UPSTREAM_URL: upstream }),
+      (error) => error instanceof AdapterConfigError && error.code === 'NON_LOOPBACK_UPSTREAM',
+      `expected ${upstream} to be refused`,
+    );
+  }
+  // Loopback is acceptable: the bytes never leave the machine.
+  for (const upstream of ['http://127.0.0.1:7676', 'http://localhost:7676', 'https://127.0.0.1:7676']) {
+    assert.equal(
+      loadAdapterConfig({ ...BASE, DEVSPACE_UPSTREAM_URL: upstream }).upstreamBaseUrl,
+      upstream,
+      `expected ${upstream} to be accepted`,
+    );
+  }
 });
 
 test('rejects binding beyond loopback for the http transport', () => {
