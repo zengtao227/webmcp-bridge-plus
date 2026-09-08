@@ -81,7 +81,7 @@ tunnel-client secrets 目录。卸载只移除本机 runtime，不会删除远�
 ### 2. 起 DevSpace（也是一次，之后就一直开着）
 
 ```bash
-~/Doc/devspace-container/start-devspace.sh
+~/Doc/devspace-container/dsup.sh
 ```
 
 `dsup.sh` 里开 Funnel 的代码已永久删除，也不再传 `DEVSPACE_PUBLIC_BASE_URL`
