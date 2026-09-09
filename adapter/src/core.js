@@ -8,6 +8,7 @@ import { authorizeRequest, firewallResponse, deniedToolResult, FirewallError } f
 import { scrubAuthMetadata, localErrorEnvelope } from './sanitize.js';
 import { DevSpaceOAuthError } from './errors.js';
 import { readBoundedText } from './bounded.js';
+import { routeOpenWorkspaceCall, rewriteToolsListPayload } from './project-registry.js';
 
 const DEFAULT_ACCEPT = 'application/json, text/event-stream';
 const SESSION_HEADER = 'mcp-session-id';
@@ -99,6 +100,7 @@ export function createAdapterCore(config, {
   oauthClient,
   log = () => {},
   fetchImpl = globalThis.fetch,
+  projectRegistry = null,
 } = {}) {
   if (!oauthClient || typeof oauthClient.getAccessToken !== 'function') {
     throw new Error('createAdapterCore requires an oauth client.');
@@ -220,7 +222,14 @@ export function createAdapterCore(config, {
     };
   }
 
-  function firewallBody(raw, contentType, requestedPath) {
+  function responsePayloadForRequest(parsed, requestMethod) {
+    const sanitized = scrubAuthMetadata(parsed);
+    return requestMethod === 'tools/list'
+      ? rewriteToolsListPayload(sanitized, projectRegistry)
+      : sanitized;
+  }
+
+  function firewallBody(raw, contentType, requestedPath, requestMethod) {
     if (contentType === 'sse') {
       const events = parseSseEvents(raw);
       let blocked = 0;
@@ -238,7 +247,9 @@ export function createAdapterCore(config, {
           log('upstream_event_unparsable', {});
           continue;
         }
-        const result = firewallResponse(scrubAuthMetadata(parsed), requestedPath);
+        const result = firewallResponse(
+          responsePayloadForRequest(parsed, requestMethod), requestedPath,
+        );
         blocked += result.blocked;
         redacted += result.redacted;
         rebuilt.push({ event: entry.event, payload: result.payload });
@@ -262,7 +273,9 @@ export function createAdapterCore(config, {
       log('upstream_body_unparsable', {});
       return null;
     }
-    const result = firewallResponse(scrubAuthMetadata(parsed), requestedPath);
+    const result = firewallResponse(
+      responsePayloadForRequest(parsed, requestMethod), requestedPath,
+    );
     if (result.blocked > 0 || result.redacted > 0) {
       log('firewall_applied', result);
     }
@@ -341,8 +354,27 @@ export function createAdapterCore(config, {
       };
     }
 
-    // Deny before DevSpace ever sees the path: the secret is never read.
-    const decision = authorizeRequest(payload);
+    // open_workspace is a routing boundary as well as a filesystem operation.
+    // Resolve it through the canonical registry before DevSpace can see any
+    // user/model-supplied path. Every other tool keeps the existing Secret
+    // Firewall behavior unchanged.
+    let effectivePayload = payload;
+    if (payload?.method === 'tools/call' && payload?.params?.name === 'open_workspace') {
+      const routed = routeOpenWorkspaceCall(payload, projectRegistry);
+      if (!routed.allowed) {
+        log('request_blocked', { reason: routed.reason });
+        return {
+          status: 200,
+          contentType: 'json',
+          body: JSON.stringify(deniedToolResult(payload.id, routed.reason)),
+        };
+      }
+      effectivePayload = routed.payload;
+      log('project_routed', { project: routed.projectId, host: projectRegistry?.currentHostId ?? null });
+    }
+
+    // Deny before DevSpace ever sees the resolved path: the secret is never read.
+    const decision = authorizeRequest(effectivePayload);
     if (!decision.allowed) {
       log('request_blocked', { reason: decision.reason });
       return {
@@ -362,13 +394,13 @@ export function createAdapterCore(config, {
 
     const upstream = await callUpstream({
       method: httpMethod === 'POST' ? 'POST' : httpMethod,
-      body: httpMethod === 'POST' ? JSON.stringify(payload) : null,
+      body: httpMethod === 'POST' ? JSON.stringify(effectivePayload) : null,
       clientSessionId,
       clientProtocolVersion,
       // An initialize request creates a fresh MCP session. Reusing the
       // previous session header makes a second ChatGPT validation attempt fail
       // with HTTP 400 instead of replacing the old session.
-      useSession: payload.method !== 'initialize',
+      useSession: effectivePayload.method !== 'initialize',
       allowRetry: true,
       accept,
     });
@@ -385,7 +417,9 @@ export function createAdapterCore(config, {
 
     let filtered;
     try {
-      filtered = firewallBody(upstream.raw ?? '', upstream.contentType, decision.requestedPath);
+      filtered = firewallBody(
+        upstream.raw ?? '', upstream.contentType, decision.requestedPath, effectivePayload.method,
+      );
     } catch (error) {
       if (error instanceof FirewallError) {
         log('firewall_failed', { code: error.code });

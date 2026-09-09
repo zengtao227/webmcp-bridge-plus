@@ -16,6 +16,7 @@
 import { unlink, chmod, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { loadAdapterConfig, AdapterConfigError } from '../src/config.js';
+import { loadProjectRegistry, ProjectRegistryError } from '../src/project-registry.js';
 import { resolveSecretRef, SecretRefError } from '../src/secrets.js';
 import { createRedactor, createLogger } from '../src/redact.js';
 import { DevSpaceOAuthClient } from '../src/oauth-client.js';
@@ -69,6 +70,20 @@ async function main() {
     throw error;
   }
 
+  let projectRegistry;
+  try {
+    const registryPath = process.env.DEVSPACE_PROJECT_REGISTRY_PATH?.trim()
+      || new URL('../../config/devspace-projects.yaml', import.meta.url);
+    projectRegistry = await loadProjectRegistry(registryPath, {
+      currentHostId: process.env.DEVSPACE_HOST_ID?.trim() || null,
+    });
+  } catch (error) {
+    if (error instanceof ProjectRegistryError) {
+      fail(2, `adapter project registry error [${error.code}]: ${error.message}`);
+    }
+    throw error;
+  }
+
   let ownerToken;
   try {
     ownerToken = await resolveSecretRef(config.ownerTokenRef);
@@ -101,7 +116,7 @@ async function main() {
     log,
   });
 
-  const core = createAdapterCore(config, { oauthClient, log });
+  const core = createAdapterCore(config, { oauthClient, log, projectRegistry });
 
   if (config.transport === 'stdio') {
     const stdio = createStdioAdapter(core, config, { log });

@@ -9,7 +9,9 @@
 # config/devspace-projects.yaml = repository canonical registry.
 # The standalone ChatGPT online Skill uses a synchronized embedded snapshot
 # (copied into SKILL.md). The online Skill does NOT read this YAML directly.
-# This file does NOT change the live V2.1 runtime by itself.
+# The private adapter loads this registry at startup and fails closed if it is
+# unavailable or invalid. The online Skill keeps a synchronized UX snapshot,
+# but the adapter is the authoritative enforcement point for open_workspace.
 
 version: 1
 
