@@ -283,7 +283,7 @@ Conclusion: Skill-only routing is UX guidance, not a sufficient correctness/secu
 
 ### A2. Adapter-enforced registry routing
 
-Status: Implemented and validated locally on 2026-09-09; live deployment/E2E pending. Full repository check passes 164/164 tests plus lint/build.
+Status: CLOSED on 2026-09-09. Implemented, reviewed, pushed (`f2f2c04` + `0368787`), runtime reloaded, and proven live by ChatGPT E2E plus host-side audit. Full repository check passes 164/164 tests plus lint/build.
 
 The private adapter is now the authoritative routing enforcement point:
 
@@ -309,11 +309,27 @@ Requirements:
 - no new MCP tool is added; the existing five-tool surface is preserved;
 - normal routing remains one `open_workspace` round trip.
 
-### A3. Repeat V2.2 six-case live E2E
+### A3. V2.2 live E2E + host-side audit
 
-Status: Required after A2 is deployed.
+Status: CLOSED on 2026-09-09.
 
-Phase 1.1/1.2 is closed only when canonical name, alias, missing project, unregistered absolute path, traversal, and read-only permission-preservation cases all behave as specified without creating guessed directories.
+Live regression covered canonical name, alias, fresh missing project, unregistered absolute path, traversal, read-only permission preservation, and the historical guessed path `/work/webmcp-bridge`.
+
+Observed result:
+
+```text
+canonical / alias
+→ exact registered path
+→ project_routed
+
+missing / guessed / unregistered
+→ project_unregistered
+→ request_blocked before upstream open_workspace
+```
+
+Host-side audit confirmed the fresh missing-project directory was not created, the valid workspace remained clean/aligned, and the security posture remained unchanged: stdio adapter, no listener on 8787, DevSpace loopback-only on `127.0.0.1:7676`, and Tailscale Funnel/Serve disabled.
+
+Conclusion: V2.2 Phase 1.1 Skill-only routing is retained as the UX lesson/superseded approach; V2.2 Phase 1.2 adapter-enforced routing is the authoritative closed implementation.
 
 ### B. DevSpace container auto-recovery
 
