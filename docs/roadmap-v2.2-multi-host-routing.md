@@ -172,7 +172,7 @@ Code → execution-host-b → offline
 - 自动去当前或其他 execution host 找同名目录；
 - 扫描其他 host；
 - 改用未批准的路径；
-- 建立公网 Funnel 作为 fallback。
+- 建立公网 DevSpace endpoint 作为 fallback。
 
 ### 5. Ambiguity 不猜
 
@@ -237,7 +237,7 @@ V2.2 Phase 1.2 已明确采用两层模型：
 
 - 关闭 execution host B 后，ProjectB 请求明确失败且不 fallback；
 - execution host A 的 ProjectA 仍正常；
-- 两台 host 都不暴露 Funnel/public MCP endpoint；
+- 两台 host 都不暴露 public MCP endpoint；
 - 两台 host 都只暴露各自批准的项目 root；
 - 一个 host 的 credential/path 不能通过另一个 host 读取；
 - natural-language routing 不扩大 write/commit/push 权限；
@@ -253,7 +253,7 @@ V2.2 第一阶段不做：
 - 自动启动离线电脑；
 - 任意 LAN discovery；
 - 任意 host filesystem search；
-- public Funnel fallback；
+- public DevSpace endpoint fallback；
 - 跨 host shell proxy；
 - 自动把同一任务拆给多台机器并行执行。
 
@@ -261,7 +261,7 @@ V2.2 第一阶段不做：
 
 ```text
 V1
-Public Tailscale Funnel
+Public DevSpace endpoint
 → abandoned
 
 V2.0

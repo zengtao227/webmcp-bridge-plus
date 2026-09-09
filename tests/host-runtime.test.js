@@ -4,6 +4,7 @@ import { execFile, spawn } from 'node:child_process';
 import { once } from 'node:events';
 import {
   chmod,
+  copyFile,
   lstat,
   mkdir,
   mkdtemp,
@@ -40,6 +41,35 @@ const MINIMAL_PAYLOAD = Object.freeze([
 async function git(cwd, args) {
   const { stdout = '' } = await execFileAsync('git', args, { cwd, encoding: 'utf8' });
   return stdout;
+}
+
+async function createCleanRepository(root) {
+  const sourceRoot = path.join(root, 'repo-under-test');
+  await execFileAsync('git', ['clone', '--quiet', '--no-hardlinks', REPO_ROOT, sourceRoot], {
+    encoding: 'utf8',
+    maxBuffer: 8 * 1024 * 1024,
+  });
+
+  for (const relativePath of [
+    'adapter/deploy/deploy-host-runtime.js',
+    'adapter/deploy/install-launchd.sh',
+    'adapter/src/core.js',
+  ]) {
+    await copyFile(path.join(REPO_ROOT, relativePath), path.join(sourceRoot, relativePath));
+  }
+
+  await git(sourceRoot, [
+    'add',
+    'adapter/deploy/deploy-host-runtime.js',
+    'adapter/deploy/install-launchd.sh',
+    'adapter/src/core.js',
+  ]);
+  await git(sourceRoot, [
+    '-c', 'user.name=Host Runtime Test',
+    '-c', 'user.email=host-runtime@example.invalid',
+    'commit', '-qm', 'test current runtime changes',
+  ]);
+  return sourceRoot;
 }
 
 async function withTempDir(callback) {
@@ -123,6 +153,9 @@ async function writeExecutable(target, contents) {
 }
 
 async function prepareInstallerScenario(root, overrides = {}) {
+  const sourceRepo = await createCleanRepository(root);
+  const candidateCommit = (await git(sourceRepo, ['rev-parse', 'HEAD'])).trim();
+  const previousCommit = (await git(sourceRepo, ['rev-parse', 'HEAD^'])).trim();
   const home = path.join(root, 'home');
   const defaultWritableRoot = path.join(home, 'Doc', 'My code');
   const runtimeRoot = path.join(home, 'Doc', 'devspace-container', 'runtime', 'webmcp-adapter');
@@ -133,11 +166,14 @@ async function prepareInstallerScenario(root, overrides = {}) {
   const healthFile = path.join(runtimeDir, 'health', 'devspace.url');
   const plistDir = path.join(home, 'Library', 'LaunchAgents');
   const plist = path.join(plistDir, 'com.webmcp.devspace-tunnel.plist');
+  const legacyPlist = path.join(plistDir, 'com.webmcp.devspace-adapter.plist');
   const liveProfile = path.join(profileDir, 'devspace.yaml');
   const fakeBin = path.join(root, 'fake-bin');
   const tmpDir = path.join(root, 'tmp');
   const fakeLog = path.join(root, 'fake.log');
   const launchdState = path.join(root, 'launchd-state');
+  const legacyLaunchdState = path.join(root, 'legacy-launchd-state');
+  const legacyBootoutCount = path.join(root, 'legacy-bootout-count');
   const bootstrapCount = path.join(root, 'bootstrap-count');
 
   await mkdir(defaultWritableRoot, { recursive: true });
@@ -150,23 +186,40 @@ async function prepareInstallerScenario(root, overrides = {}) {
   await mkdir(tmpDir, { recursive: true });
   await writeFile(keyFile, 'test-runtime-key\n');
 
+  // Model a real upgrade: the previous release and candidate must be distinct,
+  // independently verified artifacts. Reusing one artifact under a renamed
+  // releases/previous alias conflates artifact identity with current-target
+  // normalization and behaves differently across filesystem implementations.
+  await git(sourceRepo, ['checkout', '--quiet', previousCommit]);
   const initial = await deployHostRuntime({
-    sourceRoot: REPO_ROOT,
+    sourceRoot: sourceRepo,
     runtimeRoot,
     defaultWritableRoot,
   });
-  const previousRelease = path.join(runtimeRoot, 'releases', 'previous');
-  await rename(initial.releaseDir, previousRelease);
-  await rm(path.join(runtimeRoot, 'current'));
-  const previousCurrentTarget = path.join('releases', 'previous');
-  await symlink(previousCurrentTarget, path.join(runtimeRoot, 'current'), 'dir');
+  const previousCurrentTarget = path.join('releases', initial.artifactId);
+  const previousArtifactId = initial.artifactId;
   await verifyCurrent(runtimeRoot);
+
+  await git(sourceRepo, ['checkout', '--quiet', candidateCommit]);
+  const candidateSource = await inspectSource({ sourceRoot: sourceRepo });
+  assert.notEqual(
+    candidateSource.artifactId,
+    previousArtifactId,
+    'installer fixture requires distinct previous and candidate artifacts',
+  );
 
   const oldProfile = 'old-live-profile\n';
   const oldPlist = 'old-launch-agent-plist\n';
+  const oldLegacyPlist = 'old-legacy-http-launch-agent-plist\n';
   await writeFile(liveProfile, oldProfile);
   await writeFile(plist, oldPlist);
+  await writeFile(legacyPlist, oldLegacyPlist);
   await writeFile(launchdState, 'running');
+  await writeFile(
+    legacyLaunchdState,
+    overrides.FAKE_LEGACY_INITIAL_STATE === 'running' ? 'running' : 'stopped',
+  );
+  await writeFile(legacyBootoutCount, '0');
   await writeFile(bootstrapCount, '0');
   await writeFile(fakeLog, '');
 
@@ -177,24 +230,70 @@ printf 'launchctl %s\\n' "$*" >> "$FAKE_LOG"
 command_name="$1"
 all_args="$*"
 is_main=0
+is_legacy=0
 case "$all_args" in
   *com.webmcp.devspace-tunnel*) is_main=1 ;;
+  *com.webmcp.devspace-adapter*) is_legacy=1 ;;
 esac
 state=stopped
 if [ -f "$FAKE_LAUNCHD_STATE" ]; then
   state="$(cat "$FAKE_LAUNCHD_STATE")"
 fi
+legacy_state=stopped
+if [ -f "$FAKE_LEGACY_LAUNCHD_STATE" ]; then
+  legacy_state="$(cat "$FAKE_LEGACY_LAUNCHD_STATE")"
+fi
 case "$command_name" in
   print)
-    if [ "$is_main" -eq 1 ] && [ "$state" = running ]; then
-      echo '    pid = 4242'
-      exit 0
+    if [ "$is_main" -eq 1 ]; then
+      if [ "$FAKE_JOB_QUERY_ERROR" = 1 ]; then
+        exit 5
+      fi
+      if [ "$FAKE_JOB_FORCE_ABSENT" = 1 ]; then
+        exit 113
+      fi
+      count="$(cat "$FAKE_BOOTSTRAP_COUNT")"
+      if [ "$FAKE_JOB_QUERY_ERROR_AFTER_BOOTSTRAP" = 1 ] && [ "$count" -ge 1 ]; then
+        exit 5
+      fi
+      if [ "$state" = running ]; then
+        echo '    pid = 4242'
+        exit 0
+      fi
+      exit 113
     fi
-    exit 1
+    if [ "$is_legacy" -eq 1 ]; then
+      if [ "$FAKE_LEGACY_QUERY_ERROR" = 1 ]; then
+        exit 5
+      fi
+      legacy_bootouts="$(cat "$FAKE_LEGACY_BOOTOUT_COUNT")"
+      if [ "$FAKE_LEGACY_QUERY_ERROR_AFTER_BOOTOUT" = 1 ] && [ "$legacy_bootouts" -ge 1 ]; then
+        exit 5
+      fi
+      [ "$legacy_state" = running ] && exit 0
+      exit 113
+    fi
+    exit 113
     ;;
   bootout)
     if [ "$is_main" -eq 1 ]; then
+      if [ "$FAKE_BOOTOUT_FAIL" = 1 ]; then
+        exit 1
+      fi
       printf stopped > "$FAKE_LAUNCHD_STATE"
+      exit 0
+    fi
+    if [ "$is_legacy" -eq 1 ]; then
+      if [ "$FAKE_LEGACY_BOOTOUT_FAIL" = 1 ]; then
+        exit 1
+      fi
+      legacy_bootouts="$(cat "$FAKE_LEGACY_BOOTOUT_COUNT")"
+      legacy_bootouts=$((legacy_bootouts + 1))
+      printf '%s' "$legacy_bootouts" > "$FAKE_LEGACY_BOOTOUT_COUNT"
+      if [ "$FAKE_LEGACY_STAYS_LOADED" != 1 ]; then
+        printf stopped > "$FAKE_LEGACY_LAUNCHD_STATE"
+      fi
+      exit 0
     fi
     exit 0
     ;;
@@ -304,12 +403,23 @@ exit 1
     WEBMCP_READY_DELAY_SECONDS: '0',
     FAKE_LOG: fakeLog,
     FAKE_LAUNCHD_STATE: launchdState,
+    FAKE_LEGACY_LAUNCHD_STATE: legacyLaunchdState,
+    FAKE_LEGACY_BOOTOUT_COUNT: legacyBootoutCount,
     FAKE_BOOTSTRAP_COUNT: bootstrapCount,
     FAKE_HEALTH_FILE: healthFile,
     FAKE_CONNECT_FAIL: '0',
     FAKE_PLUTIL_FAIL: '0',
     FAKE_BOOTSTRAP_FAIL_ONCE: '0',
     FAKE_BOOTSTRAP_FAIL_ALWAYS: '0',
+    FAKE_BOOTOUT_FAIL: '0',
+    FAKE_JOB_QUERY_ERROR: '0',
+    FAKE_JOB_QUERY_ERROR_AFTER_BOOTSTRAP: '0',
+    FAKE_JOB_FORCE_ABSENT: '0',
+    FAKE_LEGACY_QUERY_ERROR: '0',
+    FAKE_LEGACY_QUERY_ERROR_AFTER_BOOTOUT: '0',
+    FAKE_LEGACY_BOOTOUT_FAIL: '0',
+    FAKE_LEGACY_STAYS_LOADED: '0',
+    FAKE_LEGACY_INITIAL_STATE: 'stopped',
     FAKE_READY: '0',
     ...overrides,
   };
@@ -320,21 +430,29 @@ exit 1
     runtimeRoot,
     liveProfile,
     plist,
+    legacyPlist,
     healthFile,
     fakeLog,
     launchdState,
+    legacyLaunchdState,
+    legacyBootoutCount,
     bootstrapCount,
     previousCurrentTarget,
     oldProfile,
     oldPlist,
+    oldLegacyPlist,
+    sourceRepo,
+    previousArtifactId,
+    candidateArtifactId: candidateSource.artifactId,
+    installer: path.join(sourceRepo, 'adapter', 'deploy', 'install-launchd.sh'),
   };
 }
 
-async function runInstallerScenario(root, overrides = {}) {
+async function runInstallerScenario(root, overrides = {}, args = []) {
   const scenario = await prepareInstallerScenario(root, overrides);
-  const installer = path.join(REPO_ROOT, 'adapter', 'deploy', 'install-launchd.sh');
+  const installer = scenario.installer;
   try {
-    const { stdout, stderr } = await execFileAsync('bash', [installer], {
+    const { stdout, stderr } = await execFileAsync('bash', [installer, ...args], {
       env: scenario.env,
       encoding: 'utf8',
       maxBuffer: 8 * 1024 * 1024,
@@ -362,12 +480,13 @@ async function assertPreviousActivationState(scenario) {
 
 test('builds and verifies a host-only snapshot from the real tracked adapter runtime', async () => {
   await withTempDir(async (tempRoot) => {
+    const sourceRoot = await createCleanRepository(tempRoot);
     const runtimeRoot = path.join(tempRoot, 'runtime');
     const result = await deployHostRuntime({
-      sourceRoot: REPO_ROOT,
+      sourceRoot,
       runtimeRoot,
-      projectRoot: path.dirname(REPO_ROOT),
-      defaultWritableRoot: path.dirname(REPO_ROOT),
+      projectRoot: sourceRoot,
+      defaultWritableRoot: sourceRoot,
     });
 
     const verified = await verifyRelease(result.releaseDir, {
@@ -378,7 +497,7 @@ test('builds and verifies a host-only snapshot from the real tracked adapter run
       await readlink(path.join(runtimeRoot, 'current')),
       path.join('releases', result.artifactId),
     );
-    assert.equal(verified.manifest.gitCommit, await git(REPO_ROOT, ['rev-parse', 'HEAD']).then((value) => value.trim()));
+    assert.equal(verified.manifest.gitCommit, await git(sourceRoot, ['rev-parse', 'HEAD']).then((value) => value.trim()));
     assert.deepEqual(
       verified.manifest.files.map((file) => file.path).sort(),
       [...HOST_RUNTIME_PAYLOAD].sort(),
@@ -390,7 +509,7 @@ test('builds and verifies a host-only snapshot from the real tracked adapter run
       if (object.stat.isFile() && object.relativePath !== 'config/devspace-projects.yaml') {
         const bytes = await readFile(path.join(result.releaseDir, object.relativePath));
         assert.equal(
-          bytes.includes(Buffer.from(REPO_ROOT, 'utf8')),
+          bytes.includes(Buffer.from(sourceRoot, 'utf8')),
           false,
           `snapshot contains writable-repository backreference: ${object.relativePath}`,
         );
@@ -403,14 +522,39 @@ test('builds and verifies a host-only snapshot from the real tracked adapter run
   });
 });
 
+test('deployer CLI executes when invoked through a filesystem path alias', async () => {
+  await withTempDir(async (tempRoot) => {
+    const sourceRoot = await createCleanRepository(tempRoot);
+    const sourceAlias = path.join(tempRoot, 'repo-alias');
+    const runtimeRoot = path.join(tempRoot, 'runtime');
+    await symlink(sourceRoot, sourceAlias, 'dir');
+
+    const { stdout } = await execFileAsync(process.execPath, [
+      path.join(sourceAlias, 'adapter', 'deploy', 'deploy-host-runtime.js'),
+      '--source-root', sourceAlias,
+      '--runtime-root', runtimeRoot,
+    ], {
+      encoding: 'utf8',
+      maxBuffer: 8 * 1024 * 1024,
+    });
+
+    const result = JSON.parse(stdout);
+    assert.equal(
+      await readlink(path.join(runtimeRoot, 'current')),
+      path.join('releases', result.artifactId),
+    );
+  });
+});
+
 test('starts the real adapter from the snapshot with adapter/gateway/config dependencies intact', async () => {
   await withTempDir(async (tempRoot) => {
+    const sourceRoot = await createCleanRepository(tempRoot);
     const runtimeRoot = path.join(tempRoot, 'runtime');
     const result = await deployHostRuntime({
-      sourceRoot: REPO_ROOT,
+      sourceRoot,
       runtimeRoot,
-      projectRoot: path.dirname(REPO_ROOT),
-      defaultWritableRoot: path.dirname(REPO_ROOT),
+      projectRoot: sourceRoot,
+      defaultWritableRoot: sourceRoot,
     });
 
     const stderr = [];
@@ -658,6 +802,39 @@ test('switches current atomically to a second verified release and preserves the
   });
 });
 
+test('rejects a current switch that leaves a same-artifact non-canonical alias in place', async () => {
+  await withTempDir(async (root) => {
+    const fixture = await createFixture(root);
+    const first = await deployHostRuntime({
+      ...fixture,
+      payloadPaths: MINIMAL_PAYLOAD,
+    });
+    const currentPath = path.join(fixture.runtimeRoot, 'current');
+    const aliasRelease = path.join(fixture.runtimeRoot, 'releases', 'previous');
+    await rename(first.releaseDir, aliasRelease);
+    await rm(currentPath);
+    await symlink(path.join('releases', 'previous'), currentPath, 'dir');
+
+    const aliasCurrent = await verifyCurrent(fixture.runtimeRoot);
+    assert.equal(aliasCurrent.artifactId, first.artifactId);
+
+    await assert.rejects(
+      deployHostRuntime({
+        ...fixture,
+        payloadPaths: MINIMAL_PAYLOAD,
+        replaceCurrent: async (temporaryCurrent) => {
+          // Simulate a platform/filesystem replacement that reports success but
+          // leaves the old alias in place. Artifact identity alone must not be
+          // accepted as proof that current was canonicalized.
+          await rm(temporaryCurrent);
+        },
+      }),
+      assertHostRuntimeCode('CURRENT_SWITCH_FAILED'),
+    );
+    assert.equal(await readlink(currentPath), path.join('releases', 'previous'));
+  });
+});
+
 test('rejects a corrupted release manifest, payload digest, or deployed file mode', async () => {
   await withTempDir(async (root) => {
     const fixture = await createFixture(root);
@@ -700,6 +877,44 @@ test('Tunnel installer and sample profile point only at the host-only current sn
   assert.match(sampleProfile, /devspace-container\/runtime\/webmcp-adapter\/current\/adapter\/bin\/start\.js/);
   assert.doesNotMatch(sampleProfile, /\.local\/bin\/webmcp-devspace-adapter/);
   assert.doesNotMatch(sampleProfile, /My code\/webmcp-bridge\/adapter\/bin\/start\.js/);
+});
+
+test('Phase A --status distinguishes absent exit 113 from query failure', async () => {
+  await withTempDir(async (root) => {
+    const absent = await runInstallerScenario(
+      root,
+      { FAKE_JOB_FORCE_ABSENT: '1' },
+      ['--status'],
+    );
+    assert.notEqual(absent.code, 0);
+    assert.match(absent.stderr, /未加载 LaunchAgent/);
+    assert.doesNotMatch(absent.stderr, /无法确认 LaunchAgent 状态/);
+  });
+
+  await withTempDir(async (root) => {
+    const unknown = await runInstallerScenario(
+      root,
+      { FAKE_JOB_QUERY_ERROR: '1' },
+      ['--status'],
+    );
+    assert.notEqual(unknown.code, 0);
+    assert.match(unknown.stderr, /无法确认 LaunchAgent 状态/);
+    assert.doesNotMatch(unknown.stderr, /未加载 LaunchAgent/);
+  });
+});
+
+test('Phase A unknown launchctl job state fails closed before activation changes', async () => {
+  await withTempDir(async (root) => {
+    const scenario = await runInstallerScenario(root, { FAKE_JOB_QUERY_ERROR: '1' });
+    assert.notEqual(scenario.code, 0);
+    await assertPreviousActivationState(scenario);
+    assert.match(scenario.stderr, /无法确认 LaunchAgent 状态/);
+    assert.match(scenario.stderr, /无法保存原 LaunchAgent 状态/);
+    const log = await readFile(scenario.fakeLog, 'utf8');
+    assert.doesNotMatch(log, /launchctl bootout/);
+    assert.doesNotMatch(log, /tunnel-client runtimes connect/);
+    assert.doesNotMatch(scenario.stderr, /bounded rollback 已恢复/);
+  });
 });
 
 test('connect failure restores previous current, profile, plist, and running LaunchAgent', async () => {
@@ -753,16 +968,29 @@ test('readiness timeout restores previous current, profile, plist, and running L
 test('successful activation keeps the host-only current entrypoint and commits the new state', async () => {
   await withTempDir(async (root) => {
     const scenario = await runInstallerScenario(root, { FAKE_READY: '1' });
-    assert.equal(scenario.code, 0, scenario.stderr);
-    assert.notEqual(
-      await readlink(path.join(scenario.runtimeRoot, 'current')),
-      scenario.previousCurrentTarget,
+    const currentTarget = await readlink(path.join(scenario.runtimeRoot, 'current'));
+    const log = await readFile(scenario.fakeLog, 'utf8');
+    const diagnostics = [
+      `stdout=${JSON.stringify(scenario.stdout)}`,
+      `stderr=${JSON.stringify(scenario.stderr)}`,
+      `log=${JSON.stringify(log)}`,
+      `previousTarget=${scenario.previousCurrentTarget}`,
+      `currentTarget=${currentTarget}`,
+      `previousArtifactId=${scenario.previousArtifactId}`,
+      `candidateArtifactId=${scenario.candidateArtifactId}`,
+    ].join(' ');
+
+    assert.equal(scenario.code, 0, diagnostics);
+    assert.notEqual(currentTarget, scenario.previousCurrentTarget, diagnostics);
+    assert.equal(
+      currentTarget,
+      path.join('releases', scenario.candidateArtifactId),
+      diagnostics,
     );
     assert.equal(await readFile(scenario.liveProfile, 'utf8'), 'new-live-profile\n');
     assert.notEqual(await readFile(scenario.plist, 'utf8'), scenario.oldPlist);
     assert.equal(await readFile(scenario.launchdState, 'utf8'), 'running');
 
-    const log = await readFile(scenario.fakeLog, 'utf8');
     const hostEntrypoint = path.join(
       scenario.runtimeRoot,
       'current',
@@ -771,7 +999,116 @@ test('successful activation keeps the host-only current entrypoint and commits t
       'start.js',
     );
     assert.ok(log.includes(`--mcp-command ${hostEntrypoint}`));
-    assert.equal(log.includes(`--mcp-command ${path.join(REPO_ROOT, 'adapter', 'bin', 'start.js')}`), false);
+    assert.equal(log.includes(`--mcp-command ${path.join(scenario.sourceRepo, 'adapter', 'bin', 'start.js')}`), false);
+  });
+});
+
+test('legacy HTTP query unknown fails after new Tunnel is ready and preserves legacy plist', async () => {
+  await withTempDir(async (root) => {
+    const scenario = await runInstallerScenario(root, {
+      FAKE_READY: '1',
+      FAKE_LEGACY_QUERY_ERROR: '1',
+    });
+    assert.notEqual(scenario.code, 0);
+    assert.equal(await readFile(scenario.launchdState, 'utf8'), 'running');
+    assert.equal(await readFile(scenario.legacyPlist, 'utf8'), scenario.oldLegacyPlist);
+    assert.match(scenario.stderr, /新 Secure MCP Tunnel 已 ready，但 legacy HTTP adapter 未能确认停用/);
+    assert.doesNotMatch(scenario.stdout, /✔ Secure MCP Tunnel 已由 launchd 常驻/);
+  });
+});
+
+test('legacy HTTP bootout failure fails after new Tunnel is ready and preserves legacy plist', async () => {
+  await withTempDir(async (root) => {
+    const scenario = await runInstallerScenario(root, {
+      FAKE_READY: '1',
+      FAKE_LEGACY_INITIAL_STATE: 'running',
+      FAKE_LEGACY_BOOTOUT_FAIL: '1',
+    });
+    assert.notEqual(scenario.code, 0);
+    assert.equal(await readFile(scenario.launchdState, 'utf8'), 'running');
+    assert.equal(await readFile(scenario.legacyLaunchdState, 'utf8'), 'running');
+    assert.equal(await readFile(scenario.legacyPlist, 'utf8'), scenario.oldLegacyPlist);
+    assert.match(scenario.stderr, /无法停止 legacy HTTP LaunchAgent/);
+    assert.doesNotMatch(scenario.stdout, /✔ Secure MCP Tunnel 已由 launchd 常驻/);
+  });
+});
+
+test('legacy HTTP post-bootout loaded or unknown state fails closed without rolling back new Tunnel', async () => {
+  for (const overrides of [
+    {
+      FAKE_LEGACY_INITIAL_STATE: 'running',
+      FAKE_LEGACY_STAYS_LOADED: '1',
+    },
+    {
+      FAKE_LEGACY_INITIAL_STATE: 'running',
+      FAKE_LEGACY_QUERY_ERROR_AFTER_BOOTOUT: '1',
+    },
+  ]) {
+    await withTempDir(async (root) => {
+      const scenario = await runInstallerScenario(root, {
+        FAKE_READY: '1',
+        ...overrides,
+      });
+      assert.notEqual(scenario.code, 0);
+      assert.equal(await readFile(scenario.launchdState, 'utf8'), 'running');
+      assert.equal(await readFile(scenario.legacyPlist, 'utf8'), scenario.oldLegacyPlist);
+      assert.match(scenario.stderr, /新 Secure MCP Tunnel 已 ready，但 legacy HTTP adapter 未能确认停用/);
+      assert.doesNotMatch(scenario.stdout, /✔ Secure MCP Tunnel 已由 launchd 常驻/);
+    });
+  }
+});
+
+test('legacy HTTP already absent allows successful install and disables legacy plist', async () => {
+  await withTempDir(async (root) => {
+    const scenario = await runInstallerScenario(root, { FAKE_READY: '1' });
+    assert.equal(scenario.code, 0, scenario.stderr);
+    assert.equal(await readFile(scenario.launchdState, 'utf8'), 'running');
+    await assert.rejects(readFile(scenario.legacyPlist, 'utf8'), { code: 'ENOENT' });
+    assert.equal(
+      await readFile(`${scenario.legacyPlist}.disabled`, 'utf8'),
+      scenario.oldLegacyPlist,
+    );
+    assert.match(scenario.stdout, /✔ Secure MCP Tunnel 已由 launchd 常驻/);
+  });
+});
+
+test('legacy HTTP loaded then booted out and confirmed absent allows successful install', async () => {
+  await withTempDir(async (root) => {
+    const scenario = await runInstallerScenario(root, {
+      FAKE_READY: '1',
+      FAKE_LEGACY_INITIAL_STATE: 'running',
+    });
+    assert.equal(scenario.code, 0, scenario.stderr);
+    assert.equal(await readFile(scenario.launchdState, 'utf8'), 'running');
+    assert.equal(await readFile(scenario.legacyLaunchdState, 'utf8'), 'stopped');
+    assert.equal(await readFile(scenario.legacyBootoutCount, 'utf8'), '1');
+    await assert.rejects(readFile(scenario.legacyPlist, 'utf8'), { code: 'ENOENT' });
+    assert.equal(
+      await readFile(`${scenario.legacyPlist}.disabled`, 'utf8'),
+      scenario.oldLegacyPlist,
+    );
+    assert.match(scenario.stdout, /✔ Secure MCP Tunnel 已由 launchd 常驻/);
+  });
+});
+
+test('Phase A rollback job query error exits 70 and never claims recovery', async () => {
+  await withTempDir(async (root) => {
+    const scenario = await runInstallerScenario(root, {
+      FAKE_BOOTSTRAP_FAIL_ONCE: '1',
+      FAKE_JOB_QUERY_ERROR_AFTER_BOOTSTRAP: '1',
+      FAKE_READY: '1',
+    });
+    assert.equal(scenario.code, 70);
+    assert.equal(
+      await readlink(path.join(scenario.runtimeRoot, 'current')),
+      scenario.previousCurrentTarget,
+    );
+    assert.equal(await readFile(scenario.liveProfile, 'utf8'), scenario.oldProfile);
+    assert.equal(await readFile(scenario.plist, 'utf8'), scenario.oldPlist);
+    assert.equal(await readFile(scenario.launchdState, 'utf8'), 'stopped');
+    assert.match(scenario.stderr, /ROLLBACK FAILED:/);
+    assert.match(scenario.stderr, /无法确认失败的新 LaunchAgent 状态/);
+    assert.doesNotMatch(scenario.stderr, /bounded rollback 已恢复 previous current\/profile\/plist/);
   });
 });
 

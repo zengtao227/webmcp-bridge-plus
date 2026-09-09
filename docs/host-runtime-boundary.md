@@ -133,7 +133,7 @@ This change does not:
 - stop or restart the current Tunnel;
 - install or reload a LaunchAgent;
 - stop or rebuild DevSpace;
-- change Docker or Tailscale state;
+- change Docker or host network-exposure state;
 - install Auto-Recovery;
 - change routing, OAuth, Secret Firewall behavior, or DevSpace container creation.
 

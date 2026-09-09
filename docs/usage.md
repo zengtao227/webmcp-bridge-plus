@@ -211,7 +211,6 @@ git log -5 --oneline --decorate
 
 日常使用时，不需要：
 
-- 手工打开 Tailscale Funnel；
 - 暴露公网 URL；
 - 手工启动 8787 adapter；
 - 每次重新做 OAuth；

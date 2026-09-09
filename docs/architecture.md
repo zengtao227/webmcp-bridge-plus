@@ -27,10 +27,7 @@ Docker sandbox
 /work/<approved project root>
 ```
 
-The historical V1 → V2 decision and rationale are recorded in:
-
-- [`adr/0001-devspace-private-tunnel.md`](./adr/0001-devspace-private-tunnel.md)
-- [`images/devspace-architecture-evolution.svg`](./images/devspace-architecture-evolution.svg)
+The historical V1 → V2 decision, incident context, and retired public-ingress design are recorded in [`adr/0001-devspace-private-tunnel.md`](./adr/0001-devspace-private-tunnel.md).
 
 Daily operation and troubleshooting are documented in:
 
@@ -75,14 +72,14 @@ operator forgot a shutdown step
 
 `tunnel-client` is supervised as a per-user LaunchAgent and establishes an outbound connection to the OpenAI Tunnel control plane.
 
-Normal operation therefore requires no Tailscale Funnel and no public DevSpace URL.
+Normal operation is DevSpace loopback-only plus an outbound OpenAI Secure MCP Tunnel connection. There is no public DevSpace URL.
 
 Expected network state:
 
 ```text
-Tailscale Funnel      off
 adapter TCP :8787     absent
 DevSpace :7676        127.0.0.1 only
+Tunnel connection     outbound from the Mac
 ```
 
 ### 3.2 Why the adapter uses stdio
@@ -220,7 +217,7 @@ This matters especially for `bash`: shell text cannot be completely understood b
 
 ### 3.8 `publicBaseUrl`
 
-DevSpace persists `publicBaseUrl` in the `devspace-config` volume. An old Funnel-era public URL can therefore survive after the environment variable is removed.
+DevSpace persists `publicBaseUrl` in the `devspace-config` volume. A legacy public URL can therefore survive after the environment variable is removed.
 
 The startup path normalizes the value to:
 
@@ -253,7 +250,7 @@ The browser extension must not become a privileged host agent. Local filesystem 
 The following are architectural constraints:
 
 1. DevSpace must not have a normal public MCP endpoint.
-2. Tailscale Funnel is not part of the normal path.
+2. The current runtime topology is loopback-only DevSpace plus the outbound OpenAI Secure MCP Tunnel connection.
 3. The stdio adapter is the default Tunnel target; no unauthenticated loopback HTTP adapter is permitted.
 4. DevSpace upstream must remain loopback-only.
 5. Raw tool output must not bypass Secret Firewall before model context.
@@ -261,16 +258,15 @@ The following are architectural constraints:
 7. Runtime credentials are references / protected local files, not tracked plaintext.
 8. Docker mounts remain restricted to approved project roots.
 9. Security failures fail closed instead of falling back to a weaker transport or bypass.
-10. A return to a public Funnel-style design requires a new explicit architecture decision.
+10. A return to any public inbound DevSpace design requires a new explicit architecture decision.
 
 ## 6. Current validated state
 
 As of 2026-09-08, the current path has been validated with:
 
 - ChatGPT Developer-mode Plugin → Secure MCP Tunnel → DevSpace real tool call;
-- `npm run check` passing all 156 tests;
+- full `npm run check` (lint, test suite, and build) passing;
 - Tunnel LaunchAgent `ready=true`;
-- Tailscale Funnel `No serve config`;
 - no listener on `8787`;
 - DevSpace published only on `127.0.0.1:7676`.
 

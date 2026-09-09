@@ -2,13 +2,11 @@
 
 ## 要解决的问题
 
-之前让 ChatGPT 用 DevSpace 需要开 Tailscale Funnel，把容器的 MCP 端点挂在公网上。
-2026-09-07 那次事故里，Funnel 开了大约一天没关，DevSpace 日志显示 1,732 个 HTTP 请求，
-其中 33 个是扫凭据/配置文件路径的扫描器请求；暴露后 65 秒内就来了第一批扫描流量。
+当前设计不发布普通公网 DevSpace 入口。DevSpace 保持 loopback-only，由 Mac 主动建立
+OpenAI Secure MCP Tunnel outbound connection；失败时系统应降级为不可用，而不是公网可达。
 
-失败模式是人的问题，不是技术的问题：**靠"记得关"来保证安全，一定会有一天忘记。**
-所以目标不是"记得关"，而是**根本不存在需要关的东西**，并且忘记任何一步时，
-系统的降级方向是"不可用"，永远不是"公网可见"。
+旧公网方案、事故背景和退役决策集中记录在
+[`adr/0001-devspace-private-tunnel.md`](./adr/0001-devspace-private-tunnel.md)，现行运行文档不再重复维护旧方案细节。
 
 ## 链路
 
@@ -20,7 +18,7 @@ ChatGPT
   → DevSpace 容器 127.0.0.1:7676（仅 loopback，容器网络内）
 ```
 
-没有任何入站端口，没有任何公网监听，Tailscale Funnel 不再是路径的一部分。
+没有任何 DevSpace 公网入站端口；当前运行路径只有 loopback-only DevSpace 和主动外连的 Secure MCP Tunnel。
 
 ## 为什么需要适配器
 
@@ -40,8 +38,8 @@ DevSpace 1.0.8 在 `/mcp` 上无条件挂了 `requireBearerAuth`，没有配置�
 
 ### 关键点：元数据里的主机不可达也照样能用
 
-DevSpace 的 `publicBaseUrl` 可能是个公网域名（比如 Funnel 关掉后残留的
-`https://taos-macbook-pro.tail47500.ts.net`），走隧道时根本连不上。
+DevSpace 的 `publicBaseUrl` 可能残留为旧公网域名（例如
+`https://legacy-devspace.example`），走当前私有链路时根本连不上。
 适配器拿到元数据后，把所有端点**改写回配置里的 upstream**，只保留广告出来的路径：
 注册、授权、换 token 全部打在 `127.0.0.1:7676`。这正是 `#toUpstream()` 干的事，
 也有对应的回归测试。
@@ -86,7 +84,7 @@ tunnel-client secrets 目录。卸载只移除本机 runtime，不会删除远�
 ~/Doc/devspace-container/dsup.sh
 ```
 
-`dsup.sh` 里开 Funnel 的代码已永久删除，也不再传 `DEVSPACE_PUBLIC_BASE_URL`
+`dsup.sh` 不再建立任何公网入口，也不再传 `DEVSPACE_PUBLIC_BASE_URL`
 ——不传时 DevSpace 用 `http://127.0.0.1:7676` 当自己的 base URL，
 正好和适配器连它的地址一致，OAuth 的 resource 校验才能过。
 容器默认只挂载已批准的 `~/Doc/My code` 到 `/work/My code`；
@@ -97,16 +95,39 @@ tunnel-client secrets 目录。卸载只移除本机 runtime，不会删除远�
 因此它的核心边界是 Docker 只挂载批准代码根、凭据文件覆盖，
 以及所有返回字符串再经 Secret Firewall；不声称 shell 内嵌路径一定能在读取前被拦截。
 
+### 可选：DevSpace container Auto-Recovery（Phase B repository-side）
+
+仓库提供一个独立的 macOS LaunchAgent installer：
+
+```bash
+bash ./adapter/deploy/install-devspace-recovery-launchd.sh
+```
+
+它生成的 LaunchAgent 不执行 Node、仓库代码或 DevSpace mount，只直接调用 host-only：
+
+```text
+~/Doc/devspace-container/dsup.sh
+--ensure
+```
+
+job 使用 `RunAtLoad` + 周期性 `StartInterval`，不使用持续保活语义。Docker 暂时不可用时，
+本轮 `--ensure` 应以非零 transient failure 结束并等待下一周期；如果已有容器的安全配置异常，
+`dsup.sh --ensure` 必须 fail closed，不能自动删除或替换。Docker context、loopback、mount、
+image、credential masking 和 `publicBaseUrl` 等安全策略仍全部归 host-side `dsup.sh` 所有，
+installer 不复制这些策略。
+
+当前仓库只完成 repository-side installer；本轮没有读取或修改真实 host-side `dsup.sh`，
+也没有安装真实 LaunchAgent。host-side `--ensure` contract 和 live activation 需要独立执行与审查。
+
 > 如果你手动给 DevSpace 设了 `DEVSPACE_PUBLIC_BASE_URL`，就要同时给适配器设
 > `DEVSPACE_OAUTH_RESOURCE=<那个 URL>/mcp`。默认不设才是对的。
 
 ### 坑：publicBaseUrl 是持久化在卷里的
 
 光删掉环境变量不够。DevSpace 读 `publicBaseUrl` 的优先级是
-`环境变量 → devspace-config 卷里的 config.json → 本机地址兜底`，
-而 Funnel 时代的 `https://taos-macbook-pro.tail47500.ts.net` 已经被写进了卷里。
-只要它还指向公网域名，OAuth 的 resource 校验就要求访问那个域名，
-不开 Funnel 时根本不可达，链路会断在 `AUTHORIZATION_NO_CODE`。
+`环境变量 → devspace-config 卷里的 config.json → 本机地址兜底`。
+如果历史配置仍指向公网域名，OAuth 的 resource 校验会要求访问那个域名，
+而当前私有链路不会提供该公网入口，最终会断在 `AUTHORIZATION_NO_CODE`。
 
 所以 `dsup.sh` 现在每次起容器前都会把卷里的 `publicBaseUrl` 固定成
 `http://127.0.0.1:7676`（改之前先备份成 `config.json.bak-<时间戳>`）。
@@ -134,7 +155,6 @@ tunnel-client doctor --profile devspace --explain
 # LaunchAgent 使用动态 loopback 健康端口，URL 记录在：
 # ~/Library/Application Support/tunnel-client/health/devspace.url
 
-tailscale funnel status            # 必须是 No serve config
 lsof -nP -iTCP:8787 -sTCP:LISTEN   # 必须没有输出（stdio 无监听）
 docker ps --filter name=devspace --format '{{.Ports}}'
 # → 127.0.0.1:7676->7676/tcp
@@ -150,4 +170,4 @@ docker ps --filter name=devspace --format '{{.Ports}}'
   `{"event":"auth_failed","code":"INVALID_OWNER_TOKEN"}`，没有密码、没有栈
 - `install-launchd.sh --status` 返回 `ready=true`，动态 `readyz` 为 200
 - ChatGPT 能列出工具并完成一次无副作用的只读调用
-- `tailscale funnel status` 仍是 `No serve config`，8787 不再监听
+- 8787 不再监听，DevSpace 仍只发布在 `127.0.0.1:7676`

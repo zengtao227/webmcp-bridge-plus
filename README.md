@@ -35,7 +35,7 @@ See [`CONTEXT.md`](./CONTEXT.md) for the locked project baseline.
 For the current private DevSpace design and day-to-day operation, see:
 
 - [`docs/architecture.md`](./docs/architecture.md) — current architecture and how it works;
-- [`docs/adr/0001-devspace-private-tunnel.md`](./docs/adr/0001-devspace-private-tunnel.md) — why the design moved from public Funnel to Secure MCP Tunnel;
+- [`docs/adr/0001-devspace-private-tunnel.md`](./docs/adr/0001-devspace-private-tunnel.md) — why the legacy public inbound design was retired in favor of Secure MCP Tunnel;
 - [`docs/usage.md`](./docs/usage.md) — how to use `@DevSpace` safely in normal work;
 - [`docs/troubleshooting.md`](./docs/troubleshooting.md) — known pitfalls, failure modes, and investigation order;
 - [`docs/development-roadmap.md`](./docs/development-roadmap.md) — central roadmap, execution-host direction, and DevSpace Developer Efficiency operating standard.
@@ -110,6 +110,20 @@ The installer uses `tunnel-client runtimes connect` to generate and preflight th
 current profile, then installs `tunnel-client run` as a per-user LaunchAgent.
 `tunnel-client` owns the complete tunnel process and spawns the adapter over
 stdio. See [`docs/private-tunnel-adapter.md`](./docs/private-tunnel-adapter.md).
+
+For Phase B container lifecycle recovery, the repository also provides a separate
+macOS LaunchAgent installer. After the host-side
+`~/Doc/devspace-container/dsup.sh` implements the reviewed `--ensure` contract,
+install or remove the periodic ensure job with:
+
+```bash
+bash ./adapter/deploy/install-devspace-recovery-launchd.sh
+bash ./adapter/deploy/install-devspace-recovery-launchd.sh --uninstall
+```
+
+The recovery LaunchAgent directly invokes the host-only `dsup.sh --ensure`; it
+does not execute repository code. Repository-side implementation does not imply
+that the host-side contract or live LaunchAgent activation has been completed.
 
 ## Current milestone
 

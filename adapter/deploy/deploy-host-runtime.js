@@ -2,6 +2,7 @@
 
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import {
   lstat,
   mkdir,
@@ -560,8 +561,18 @@ export async function deployHostRuntime({
     }
 
     const current = await verifyCurrent(runtimeAbsolute);
-    if (!current || current.artifactId !== source.artifactId) {
-      fail('Atomic current switch did not resolve to the verified release.', 'CURRENT_SWITCH_FAILED');
+    let currentTarget;
+    try {
+      currentTarget = await readlink(currentPath);
+    } catch (error) {
+      fail('Atomic current switch did not leave a readable current symlink.', 'CURRENT_SWITCH_FAILED', { cause: error });
+    }
+    if (
+      !current
+      || current.artifactId !== source.artifactId
+      || currentTarget !== relativeTarget
+    ) {
+      fail('Atomic current switch did not resolve to the canonical verified release.', 'CURRENT_SWITCH_FAILED');
     }
     return Object.freeze({
       artifactId: source.artifactId,
@@ -632,8 +643,21 @@ async function main() {
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
 
-const invokedPath = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : null;
-if (invokedPath === import.meta.url) {
+function canonicalModuleUrl(candidate) {
+  if (!candidate) return null;
+  try {
+    return pathToFileURL(realpathSync(path.resolve(candidate))).href;
+  } catch {
+    return pathToFileURL(path.resolve(candidate)).href;
+  }
+}
+
+// macOS exposes some paths through aliases such as /var -> /private/var. Compare
+// canonical paths so invoking the CLI through either spelling cannot silently
+// skip main() while still exiting successfully.
+const invokedPath = canonicalModuleUrl(process.argv[1]);
+const modulePath = canonicalModuleUrl(fileURLToPath(import.meta.url));
+if (invokedPath === modulePath) {
   main().catch((error) => {
     const code = error instanceof HostRuntimeError ? error.code : 'UNEXPECTED_HOST_RUNTIME_ERROR';
     process.stderr.write(`host runtime deployment failed [${code}]: ${error.message}\n`);

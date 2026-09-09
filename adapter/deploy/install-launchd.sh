@@ -43,8 +43,31 @@ if [ -z "$TUNNEL_CLIENT_BIN" ] || [ ! -x "$TUNNEL_CLIENT_BIN" ]; then
   echo "找不到 tunnel-client；可用 TUNNEL_CLIENT_BIN=/absolute/path 指定。" >&2
   exit 1
 fi
+
+query_launch_agent_state() {
+  local target_label query_status
+  target_label="${1:-$LABEL}"
+  if launchctl print "$DOMAIN/$target_label" >/dev/null 2>&1; then
+    printf 'loaded\n'
+    return 0
+  else
+    query_status=$?
+  fi
+
+  if [ "$query_status" -eq 113 ]; then
+    printf 'absent\n'
+    return 0
+  fi
+
+  echo "无法确认 LaunchAgent 状态：$target_label (launchctl exit=$query_status)" >&2
+  return 1
+}
+
 status() {
-  if ! launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
+  if ! launch_state="$(query_launch_agent_state)"; then
+    return 1
+  fi
+  if [ "$launch_state" = "absent" ]; then
     echo "未加载 LaunchAgent：$LABEL" >&2
     return 1
   fi
@@ -65,7 +88,18 @@ status() {
     return 1
   fi
 
-  pid="$(launchctl print "$DOMAIN/$LABEL" 2>/dev/null | sed -nE 's/^[[:space:]]*pid = ([0-9]+)$/\1/p' | head -1)"
+  if launch_info="$(launchctl print "$DOMAIN/$LABEL" 2>/dev/null)"; then
+    :
+  else
+    launch_info_status=$?
+    if [ "$launch_info_status" -eq 113 ]; then
+      echo "LaunchAgent 在状态检查期间变为未加载：$LABEL" >&2
+    else
+      echo "无法读取 LaunchAgent 详情：$LABEL (launchctl exit=$launch_info_status)" >&2
+    fi
+    return 1
+  fi
+  pid="$(printf '%s\n' "$launch_info" | sed -nE 's/^[[:space:]]*pid = ([0-9]+)$/\1/p' | head -1)"
   echo "ready=true label=$LABEL pid=${pid:-unknown} health=$health_base/readyz"
 }
 
@@ -131,7 +165,11 @@ capture_recoverable_state() {
     fi
   fi
 
-  if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
+  if ! launch_state="$(query_launch_agent_state)"; then
+    echo "无法保存原 LaunchAgent 状态；拒绝进入激活流程。" >&2
+    return 1
+  fi
+  if [ "$launch_state" = "loaded" ]; then
     had_service=1
     if [ "$had_plist" -ne 1 ]; then
       echo "原 LaunchAgent 正在运行但没有可恢复 plist；拒绝进入激活流程。" >&2
@@ -193,12 +231,31 @@ PY
 rollback_activation() {
   rollback_failed=0
   rollback_required=0
+  can_restore_service=0
 
-  if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
-    if ! launchctl bootout "$DOMAIN/$LABEL" >/dev/null 2>&1; then
-      echo "ROLLBACK ERROR: 无法停止失败的新 LaunchAgent。" >&2
-      rollback_failed=1
+  if launch_state="$(query_launch_agent_state)"; then
+    if [ "$launch_state" = "loaded" ]; then
+      if ! launchctl bootout "$DOMAIN/$LABEL" >/dev/null 2>&1; then
+        echo "ROLLBACK ERROR: 无法停止失败的新 LaunchAgent。" >&2
+        rollback_failed=1
+      fi
+      if launch_state="$(query_launch_agent_state)"; then
+        if [ "$launch_state" = "absent" ]; then
+          can_restore_service=1
+        else
+          echo "ROLLBACK ERROR: 失败的新 LaunchAgent 仍处于 loaded 状态。" >&2
+          rollback_failed=1
+        fi
+      else
+        echo "ROLLBACK ERROR: bootout 后无法确认 LaunchAgent 状态。" >&2
+        rollback_failed=1
+      fi
+    else
+      can_restore_service=1
     fi
+  else
+    echo "ROLLBACK ERROR: 无法确认失败的新 LaunchAgent 状态。" >&2
+    rollback_failed=1
   fi
   if ! "$TUNNEL_CLIENT_BIN" runtimes stop "$ALIAS" >/dev/null 2>&1; then
     echo "ROLLBACK ERROR: 无法停止失败的新 tunnel runtime。" >&2
@@ -218,7 +275,10 @@ rollback_activation() {
   fi
 
   if [ "$had_service" -eq 1 ]; then
-    if [ ! -f "$PLIST" ]; then
+    if [ "$can_restore_service" -ne 1 ]; then
+      echo "ROLLBACK ERROR: 当前 LaunchAgent 状态未知，不能安全恢复原 LaunchAgent。" >&2
+      rollback_failed=1
+    elif [ ! -f "$PLIST" ]; then
       echo "ROLLBACK ERROR: 原 LaunchAgent 曾运行，但恢复后的 plist 不存在。" >&2
       rollback_failed=1
     else
@@ -228,6 +288,14 @@ rollback_activation() {
       fi
       if ! launchctl bootstrap "$DOMAIN" "$PLIST" >/dev/null 2>&1; then
         echo "ROLLBACK ERROR: 无法重新 bootstrap 原 LaunchAgent。" >&2
+        rollback_failed=1
+      elif launch_state="$(query_launch_agent_state)"; then
+        if [ "$launch_state" != "loaded" ]; then
+          echo "ROLLBACK ERROR: 原 LaunchAgent bootstrap 后确认 absent。" >&2
+          rollback_failed=1
+        fi
+      else
+        echo "ROLLBACK ERROR: 无法确认原 LaunchAgent 已恢复 loaded 状态。" >&2
         rollback_failed=1
       fi
     fi
@@ -268,11 +336,39 @@ case "${1:-}" in
     exit $?
     ;;
   --uninstall)
-    launchctl bootout "$DOMAIN/$LABEL" >/dev/null 2>&1 || true
+    if ! launch_state="$(query_launch_agent_state "$LABEL")"; then
+      echo "无法确认当前 LaunchAgent 状态；拒绝卸载。" >&2
+      exit 1
+    fi
+    if [ "$launch_state" = "loaded" ]; then
+      if ! launchctl bootout "$DOMAIN/$LABEL" >/dev/null 2>&1; then
+        echo "无法停止当前 LaunchAgent；拒绝卸载。" >&2
+        exit 1
+      fi
+      if ! launch_state="$(query_launch_agent_state "$LABEL")" || [ "$launch_state" != "absent" ]; then
+        echo "bootout 后无法确认当前 LaunchAgent 已停止；拒绝修改 plist。" >&2
+        exit 1
+      fi
+    fi
+
+    if ! legacy_state="$(query_launch_agent_state "$LEGACY_LABEL")"; then
+      echo "无法确认 legacy LaunchAgent 状态；拒绝修改 legacy plist。" >&2
+      exit 1
+    fi
+    if [ "$legacy_state" = "loaded" ]; then
+      if ! launchctl bootout "$DOMAIN/$LEGACY_LABEL" >/dev/null 2>&1; then
+        echo "无法停止 legacy LaunchAgent；拒绝修改 legacy plist。" >&2
+        exit 1
+      fi
+      if ! legacy_state="$(query_launch_agent_state "$LEGACY_LABEL")" || [ "$legacy_state" != "absent" ]; then
+        echo "bootout 后无法确认 legacy LaunchAgent 已停止；拒绝修改 legacy plist。" >&2
+        exit 1
+      fi
+    fi
+
     "$TUNNEL_CLIENT_BIN" runtimes stop "$ALIAS" >/dev/null 2>&1 || true
     "$TUNNEL_CLIENT_BIN" runtimes rm "$ALIAS" >/dev/null 2>&1 || true
     disable_plist "$PLIST"
-    launchctl bootout "$DOMAIN/$LEGACY_LABEL" >/dev/null 2>&1 || true
     disable_plist "$LEGACY_PLIST"
     echo "已停用本机 LaunchAgent 并移除 runtime 元数据：$ALIAS（远端 tunnel 和本机 key 保留）"
     exit 0
@@ -434,6 +530,14 @@ if [ "$had_service" -eq 1 ]; then
     echo "无法停止原 LaunchAgent；触发 bounded rollback。" >&2
     exit 1
   fi
+  if ! launch_state="$(query_launch_agent_state)"; then
+    echo "停止原 LaunchAgent 后无法确认状态；触发 bounded rollback。" >&2
+    exit 1
+  fi
+  if [ "$launch_state" != "absent" ]; then
+    echo "停止原 LaunchAgent 后仍确认 loaded；触发 bounded rollback。" >&2
+    exit 1
+  fi
 fi
 "$TUNNEL_CLIENT_BIN" runtimes stop "$ALIAS" >/dev/null 2>&1 || true
 if ! "$TUNNEL_CLIENT_BIN" runtimes connect \
@@ -504,9 +608,39 @@ fi
 rollback_required=0
 
 # Retire the obsolete standalone HTTP adapter only after the stdio tunnel is
-# proven ready. Keep its plist as a recoverable disabled artifact.
-launchctl bootout "$DOMAIN/$LEGACY_LABEL" >/dev/null 2>&1 || true
-disable_plist "$LEGACY_PLIST"
+# proven ready. Keep its plist as a recoverable disabled artifact, but never
+# mutate it when launchd cannot confirm the legacy service state. A cleanup
+# failure must make the installer non-zero without rolling back the already-ready
+# stdio Tunnel.
+legacy_cleanup_failed=0
+if legacy_state="$(query_launch_agent_state "$LEGACY_LABEL")"; then
+  if [ "$legacy_state" = "loaded" ]; then
+    if ! launchctl bootout "$DOMAIN/$LEGACY_LABEL" >/dev/null 2>&1; then
+      echo "无法停止 legacy HTTP LaunchAgent；保留 legacy plist 不变。" >&2
+      legacy_cleanup_failed=1
+    elif legacy_state="$(query_launch_agent_state "$LEGACY_LABEL")"; then
+      if [ "$legacy_state" = "absent" ]; then
+        disable_plist "$LEGACY_PLIST"
+      else
+        echo "legacy HTTP LaunchAgent bootout 后仍处于 loaded；保留 legacy plist 不变。" >&2
+        legacy_cleanup_failed=1
+      fi
+    else
+      echo "legacy HTTP LaunchAgent bootout 后状态未知；保留 legacy plist 不变。" >&2
+      legacy_cleanup_failed=1
+    fi
+  else
+    disable_plist "$LEGACY_PLIST"
+  fi
+else
+  echo "无法确认 legacy HTTP LaunchAgent 状态；保留 legacy plist 不变。" >&2
+  legacy_cleanup_failed=1
+fi
+
+if [ "$legacy_cleanup_failed" -ne 0 ]; then
+  echo "ERROR: 新 Secure MCP Tunnel 已 ready，但 legacy HTTP adapter 未能确认停用，需要人工检查；新 Tunnel 保持运行。" >&2
+  exit 1
+fi
 
 # The pre-Phase-A launcher was a symlink back into the DevSpace-writable repo.
 # Remove only that exact legacy symlink after the host-only runtime is proven

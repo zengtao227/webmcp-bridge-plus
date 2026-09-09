@@ -327,29 +327,28 @@ missing / guessed / unregistered
 → request_blocked before upstream open_workspace
 ```
 
-Host-side audit confirmed the fresh missing-project directory was not created, the valid workspace remained clean/aligned, and the security posture remained unchanged: stdio adapter, no listener on 8787, DevSpace loopback-only on `127.0.0.1:7676`, and Tailscale Funnel/Serve disabled.
+Host-side audit confirmed the fresh missing-project directory was not created, the valid workspace remained clean/aligned, and the security posture remained unchanged: stdio adapter, no listener on 8787, DevSpace loopback-only on `127.0.0.1:7676`, with no public DevSpace endpoint in the runtime path.
 
 Conclusion: V2.2 Phase 1.1 Skill-only routing is retained as the UX lesson/superseded approach; V2.2 Phase 1.2 adapter-enforced routing is the authoritative closed implementation.
 
 ### B. DevSpace container auto-recovery
 
-Status: Next infrastructure work item
+Status: Repository-side implementation complete; host-side `dsup.sh --ensure` change and live activation remain pending independent review.
 
-Goal: an unattended execution host should recover DevSpace after host login/reboot and after the local container runtime becomes unavailable/restarts, without weakening the current security model.
+Goal: an unattended macOS execution host should recover DevSpace after login/reboot and after a transient local container-runtime outage without weakening the current security model.
 
-Important design constraints:
+Repository-side design:
 
-- preserve `dsup.sh` security/setup behavior rather than bypassing it with a simplistic raw `docker start` / `restart: always`;
-- preserve loopback-only DevSpace binding;
-- preserve restricted mounts and secret masking;
-- preserve `publicBaseUrl` normalization;
-- fail closed if an existing DevSpace container has an unexpected/unsafe configuration;
-- recovery must handle not only login-time startup ordering but also a later Docker/container-runtime restart;
-- implementation is platform-specific behind the generic execution-host model.
+- a dedicated per-user LaunchAgent directly invokes host-only `~/Doc/devspace-container/dsup.sh --ensure`;
+- use `RunAtLoad` plus a periodic `StartInterval` and no persistent keepalive behavior;
+- do not execute repository code, DevSpace-mounted code, Node recovery controllers, or direct Docker lifecycle commands from the LaunchAgent;
+- keep all container creation and security policy inside the existing host-side `dsup.sh` control plane;
+- Docker temporarily unavailable is a transient non-zero ensure result; a later interval retries;
+- unsafe existing container state fails closed and must not be deleted or replaced automatically.
 
-For macOS, a periodic/idempotent `launchd` ensure job is a candidate design. Windows will require an equivalent Windows-native lifecycle mechanism rather than assuming `launchd`.
+The host-side `--ensure` implementation must continue to enforce the existing local Docker context, loopback-only binding, approved project mount, exact read-only credential overlays, image policy, `publicBaseUrl` normalization, and secret/mount checks. The repository-side installer does not duplicate those rules or add a separate public-endpoint detector.
 
-Auto-recovery must be implemented and reviewed as a separate change from routing.
+This status does **not** mean the host-side script has been changed or that a real LaunchAgent has been installed or activated.
 
 ### C. Developer Efficiency Phase 1
 

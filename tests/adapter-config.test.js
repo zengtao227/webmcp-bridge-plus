@@ -54,7 +54,7 @@ test('requires an absolute socket path for the unix transport', () => {
 
 test('rejects an unknown transport', () => {
   assert.throws(
-    () => loadAdapterConfig({ ...BASE, ADAPTER_TRANSPORT: 'funnel' }),
+    () => loadAdapterConfig({ ...BASE, ADAPTER_TRANSPORT: 'bogus' }),
     (error) => error instanceof AdapterConfigError && error.code === 'INVALID_TRANSPORT',
   );
 });
@@ -65,7 +65,7 @@ test('requires the DevSpace upstream to be loopback, so credentials never leave 
   for (const upstream of [
     'http://devspace.internal:7676',
     'https://devspace.internal:7676',
-    'https://taos-macbook-pro.tail47500.ts.net',
+    'https://public-devspace.example',
   ]) {
     assert.throws(
       () => loadAdapterConfig({ ...BASE, DEVSPACE_UPSTREAM_URL: upstream }),

@@ -8,7 +8,6 @@
 
 ```text
 LaunchAgent / tunnel     ready=true
-Tailscale Funnel         No serve config
 adapter :8787            无监听
 DevSpace :7676           127.0.0.1 only
 DevSpace publicBaseUrl   http://127.0.0.1:7676
@@ -19,38 +18,19 @@ adapter transport        stdio
 
 ```bash
 ./adapter/deploy/install-launchd.sh --status
-tailscale funnel status
 lsof -nP -iTCP:8787 -sTCP:LISTEN
 docker ps --filter name=devspace --format '{{.Ports}}'
 ```
 
 如果这些基线不成立，先修运行环境，不要先改协议代码。
 
-## 2. 坑：Tailscale Funnel 忘记关闭
+## 2. 坑：不要恢复旧公网入站架构
 
-### 现象
+旧公网方案、事故原因和退役决策只在
+[`adr/0001-devspace-private-tunnel.md`](./adr/0001-devspace-private-tunnel.md) 中维护。
 
-旧 V1 方案依赖 Funnel 把 DevSpace 暴露到公网，并要求使用结束后手工关闭。
-
-2026-09-07 的实际事故中，Funnel 大约一天没有关闭：
-
-- DevSpace 收到 1,732 个 HTTP 请求；
-- 其中 33 个请求在扫描凭据或配置路径；
-- 公开后约 65 秒出现第一批扫描流量。
-
-### 根因
-
-安全依赖人工“记得关”，属于 fail-open 操作模型。
-
-### 现在的处理
-
-Funnel 已从正常架构移除。正常使用 Secure MCP Tunnel 时：
-
-```text
-Tailscale Funnel = No serve config
-```
-
-不要把 Funnel 当成自动 fallback。
+当前拓扑固定为：DevSpace 只监听 loopback，Mac 主动建立 OpenAI Secure MCP Tunnel outbound connection。
+排障时不得把“临时建立公网入口”当成 fallback；如果私有链路不可用，应 fail closed。
 
 ## 3. 坑：loopback HTTP adapter 仍然是一个可连接地址
 
@@ -102,7 +82,7 @@ stdio adapter
 
 ### 现象
 
-已经删除 `DEVSPACE_PUBLIC_BASE_URL` 环境变量，但 OAuth 仍然指向旧的 Funnel 域名，导致不开 Funnel 时授权失败，例如出现：
+已经删除 `DEVSPACE_PUBLIC_BASE_URL` 环境变量，但 OAuth 仍然指向旧公网域名，导致当前私有链路授权失败，例如出现：
 
 ```text
 AUTHORIZATION_NO_CODE
@@ -118,7 +98,7 @@ DevSpace 读取 `publicBaseUrl` 的优先级包含持久化 volume：
 → 本机地址 fallback
 ```
 
-所以 Funnel 时代的公网 URL 可能继续留在 volume 里。
+所以历史公网 URL 可能继续留在 volume 里。
 
 ### 现在的处理
 
@@ -261,11 +241,20 @@ adapter 继续存活
 
 ### 当前状态
 
-自动恢复尚未实现。
-
-原因是目前还没有对真实 DevSpace 做足够 probe，确认“invalid/stale MCP session”的精确错误 signal 是 HTTP 400、404、某个 JSON-RPC error code，还是其他形式。
+Phase B 已提供 **repository-side** 的 DevSpace container lifecycle recovery installer，
+但它不等于 stale MCP session 自动修复。后者仍未实现，因为目前还没有对真实 DevSpace
+做足够 probe，确认“invalid/stale MCP session”的精确错误 signal 是 HTTP 400、404、
+某个 JSON-RPC error code，还是其他形式。
 
 不要凭猜测把所有 400 都当成 stale session，否则可能把真正的 malformed request 错判成 session failure。
+
+container lifecycle recovery 的行为边界是：launchd 周期性直接执行 host-only
+`~/Doc/devspace-container/dsup.sh --ensure`。如果 Docker 暂时不可用，本轮应非零退出，
+不做破坏性操作，等待下一周期；如果已有容器的配置不满足安全条件，`--ensure` 必须
+fail closed，不删除、不替换、不尝试绕过原 `dsup.sh` 的安全创建路径。
+
+当前仓库没有读取或修改真实 host-side `dsup.sh`，因此上述 `--ensure` 行为仍属于
+host-side change contract，不能当作已经 live activated。
 
 ### 当前恢复方式
 
@@ -399,19 +388,7 @@ My code
 ready=true
 ```
 
-### B. 有没有错误恢复到公网架构
-
-```bash
-tailscale funnel status
-```
-
-预期：
-
-```text
-No serve config
-```
-
-### C. adapter 是否错误监听 8787
+### B. adapter 是否错误监听 8787
 
 ```bash
 lsof -nP -iTCP:8787 -sTCP:LISTEN
@@ -419,7 +396,7 @@ lsof -nP -iTCP:8787 -sTCP:LISTEN
 
 预期：无输出。
 
-### D. DevSpace 是否只在 loopback
+### C. DevSpace 是否只在 loopback
 
 ```bash
 docker ps --filter name=devspace --format '{{.Ports}}'
@@ -431,18 +408,18 @@ docker ps --filter name=devspace --format '{{.Ports}}'
 127.0.0.1:7676->7676/tcp
 ```
 
-### E. publicBaseUrl 是否又变成旧公网 URL
+### D. publicBaseUrl 是否又变成旧公网 URL
 
 检查 `devspace-config` volume。
 
-### F. 运行本地验证
+### E. 运行本地验证
 
 ```bash
 npm run check
 tunnel-client doctor --profile devspace --explain
 ```
 
-### G. 最后才考虑协议代码
+### F. 最后才考虑协议代码
 
 如果 network/runtime/OAuth 都健康，再检查：
 

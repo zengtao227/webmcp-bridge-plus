@@ -349,7 +349,7 @@ Never:
 
 - fall back to another host;
 - search for the same project elsewhere;
-- enable a Funnel / public endpoint;
+- enable a public DevSpace endpoint;
 - change the project's host mapping.
 
 This phase does not implement online/offline detection runtime code. The rule is

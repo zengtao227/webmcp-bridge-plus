@@ -1,7 +1,7 @@
 // Transport-independent MCP handling.
 //
 // Both the stdio transport (tunnel-client spawns us) and the http/unix
-// transports funnel through here, so the Secret Firewall and the auth retry
+// transports flow through here, so the Secret Firewall and the auth retry
 // cannot be bypassed by choosing a different transport.
 
 import { authorizeRequest, firewallResponse, deniedToolResult, FirewallError } from './firewall.js';
