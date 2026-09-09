@@ -249,22 +249,28 @@ skills/devspace-project-router/SKILL.md
 
 > **先分析和给方案，批准后才能改；改完先 review，再 commit；commit 再 review，最后 push。**
 
-## 9. 未来：V2.2 多 host 路由（规划中，尚未上线）
+## 9. V2.2 project routing（single-host enforcement implemented; multi-host planned）
 
-V2.2 的目标是不用改你现在的说法，但底层能自动选 host。
-
-例如未来可能这样（当前仍是单 host，请勿当作已上线）：
+用户仍然只需要说项目名，不需要知道 execution host、操作系统或父目录：
 
 ```text
-@DevSpace 去 trading-engine 看一下当前修改
+@DevSpace 去 webmcp-bridge 看一下当前修改
 ```
 
-你仍然只需要说项目名 `trading-engine`，**不需要知道它在 MacBook Pro 还是 Mac Mini，也不需要知道它的父文件夹是 `My code` 还是 `Code`**。路由层根据项目注册表决定 host 和路径：
+当前 registry 位于 `config/devspace-projects.yaml`。在线 Skill 负责帮助模型理解项目名，但**adapter 才是最终执法点**：
 
 ```text
-trading-engine  →  注册表  →  host/app  →  该 host 的批准路径
+project reference
+→ adapter registry lookup
+→ canonical name / alias / exact registered path
+→ exact registered project.path
+→ real DevSpace open_workspace
 ```
 
-当前 V2.1 只在一台 MacBook Pro 上工作；多 host 选择需要每台 host 各自注册的 DevSpace App/backend，该能力尚未在真实环境验证。在它上线之前，Mac Mini 等第二台 host 不应被当作可用。
+如果模型自己猜 `/work/webmcp-bridge`，或者用户给出未注册的绝对路径，adapter 必须在调用真实 DevSpace 前拒绝。未知项目不得通过 `open_workspace` 创建空目录。
 
-无论 V2.1 还是 V2.2，未知项目名（如 `definitely-not-a-real-project`）都必须**失败关闭**：路由层绝不调用 `open_workspace`，也绝不凭空创建目录。`open_workspace` 只接受来自已注册项目条目的路径。
+adapter 还会改写 `tools/list` 中 `open_workspace.path` 的 schema，让 ChatGPT 看到的是当前 execution host 上已注册的 project references，而不是一个可以任意填写的 filesystem path。
+
+当前 registry 只有一个 live execution host，因此 adapter 可以自动选它。未来 registry 一旦包含多个 host，每个 adapter runtime 必须显式配置 `DEVSPACE_HOST_ID`；未配置时启动失败关闭。真正的 per-host App/backend 自动选择仍属于后续 multi-host 阶段。
+
+示例中的 MacBook Pro、Mac Mini 或 Windows PC 都只是 execution host 的可能实现，不是架构假设。

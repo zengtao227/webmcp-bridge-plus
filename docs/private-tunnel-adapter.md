@@ -54,6 +54,7 @@ DevSpace 的 `publicBaseUrl` 可能是个公网域名（比如 Funnel 关掉后�
 | 不信任任何请求头 | 不读 `Host` / `X-Forwarded-For` / `X-Real-IP` / 自报的设备标识 |
 | 不发布 OAuth 元数据 | 隧道侧不会触发浏览器授权，也不暴露端点 |
 | 工具 allowlist | 只转发当前已审查的 `open_workspace/read/write/edit/bash`；DevSpace 新增工具默认拒绝 |
+| project registry enforcement | `open_workspace` 必须先通过 `config/devspace-projects.yaml` 解析；unknown / unregistered path / wrong backend 在到达 DevSpace 前拒绝，`tools/list` 只广告当前 execution host 的 registered references |
 | 凭据只有引用 | `env:` / `file:` / `keychain:`，配置里永远没有明文 |
 | 日志脱敏 | bearer、JWT、命名字段、已注册的原文（≥8 字符）全部替换 |
 | 失败即关闭 | owner 密码错、JSON 畸形、body 超限、元数据异常一律拒绝，不降级放行 |

@@ -22,6 +22,10 @@ instead of pasting:
 This skill resolves **location only**. It never changes what the user asked
 DevSpace to do, and it never grants permission the user did not give.
 
+The Skill is UX guidance, not the enforcement boundary. The private adapter is
+authoritative: every `open_workspace` call is resolved against the canonical
+registry and only an exact registered `project.path` may reach DevSpace.
+
 ## Evolution note (V2.1 -> V2.2)
 
 - **V2.1 (historical):** `project name -> /work/My code/<project>` on one known host.
@@ -53,9 +57,10 @@ The canonical routing data lives in:
 config/devspace-projects.yaml
 ```
 
-This repository file is the source of truth. When this Skill is deployed into
-ChatGPT via the online editor, the live Skill cannot read this repository file —
-use the embedded snapshot in the next section instead.
+This repository file is the source of truth. The private adapter loads it at
+startup and fails closed if it is unavailable or invalid. When this Skill is
+deployed into ChatGPT via the online editor, the live Skill cannot read this
+repository file — use the embedded snapshot in the next section instead.
 
 It is data-only:
 

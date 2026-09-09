@@ -276,36 +276,54 @@ As of 2026-09-08, the current path has been validated with:
 
 For detailed operational evidence, see the evals under `.agent/evals/` and the private Tunnel runbook.
 
-## 7. V2.2 planned routing (foundation)
+## 7. V2.2 registry routing and adapter enforcement
 
-V2.2 adds multi-host execution behind the same natural-language entry. The
-repository-side foundation is an explicit, data-only registry:
+V2.2 keeps the project-centric natural-language entry, but routing correctness
+no longer depends on the online Skill being selected before the DevSpace App.
+The canonical registry is:
 
 ```text
 project identity
    ↓
-explicit registry (config/devspace-projects.yaml)
+config/devspace-projects.yaml
    ↓
-host/app
-   ↓
-approved path
+registered host/app + exact approved path
 ```
 
-The routing Skill resolves a project name to a registry entry, then to the
-registered path, then calls the existing `open_workspace` on the already-connected
-DevSpace backend. The `app` field in the registry is routing/planned metadata for
-future multi-host App selection, not a callable identifier today. The mandatory
-invariant is:
+There are now two layers with different responsibilities:
 
 ```text
-Unique -> execute
-Ambiguous -> ask
-Missing -> fail closed
+Online routing Skill
+→ UX guidance / project-name intent
+
+Private adapter
+→ authoritative registry enforcement
+→ tools/list narrows open_workspace.path to registered references
+→ tools/call resolves canonical name / alias / exact registered path
+→ forwards only the exact registered project.path
 ```
 
-This phase does not change the V2.0/V2.1 runtime, the adapter, the Tunnel, the
-Secret Firewall, OAuth, Docker, or any MCP tool schema. The current single-host
-deployment uses the already-connected DevSpace backend; per-host App/backend
-selection requires the registered `app` value and is actionable only after V2.2
-multi-App routing is validated live — that capability is not yet
-proven live and is documented, not implemented.
+The Skill is not a security boundary. If it is skipped, stale, or not selected,
+`open_workspace` still cannot reach DevSpace with an unknown or guessed path.
+Unknown names, unregistered absolute paths, ambiguous matches, an unavailable
+registry, and projects registered to a different non-selectable backend all fail
+closed before the upstream DevSpace tool is called.
+
+The `app` field remains routing/planned metadata for future per-host backend
+selection. The current adapter automatically selects the sole registered host;
+once the registry contains more than one host, each adapter runtime must provide
+`DEVSPACE_HOST_ID`, otherwise startup fails closed.
+
+The mandatory routing invariant remains:
+
+```text
+Unique registered project on this backend -> rewrite to exact path -> execute
+Ambiguous registered match                -> fail closed / require disambiguation
+Missing or unregistered                   -> fail closed
+Registry unavailable or invalid           -> adapter startup fails closed
+Different registered backend              -> fail closed; never fall back
+```
+
+This enforcement changes only the private adapter's routing boundary. The Tunnel,
+OAuth flow, Secret Firewall, Docker isolation, and the reviewed five-tool MCP
+surface remain unchanged.

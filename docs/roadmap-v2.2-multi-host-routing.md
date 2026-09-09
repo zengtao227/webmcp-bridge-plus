@@ -150,26 +150,26 @@ project name
 
 ### 3. 每个 host 保持独立安全边界
 
-Mac Mini 的加入不能要求 MacBook Pro：
+增加任意第二个 execution host 时，都不能要求第一个 host：
 
-- 挂载 Mac Mini 文件；
-- 代理 Mac Mini shell；
-- 持有 Mac Mini 本地凭据；
-- 扩大 MacBook Pro 的 Docker mount。
+- 挂载另一台 host 的文件；
+- 代理另一台 host 的 shell；
+- 持有另一台 host 的本地凭据；
+- 扩大本机 Docker/container mount。
 
-同样，Mac Mini 不应该获得 MacBook Pro 的项目或凭据。
+各 execution host 之间都不应该互相获得项目文件或凭据。MacBook Pro、Mac Mini、Windows PC 只是在不同部署中的可能实现。
 
 ### 4. Fail closed
 
-如果项目映射到 Mac Mini，但 Mac Mini 离线：
+如果项目映射到另一个 execution host，但该 host 离线：
 
 ```text
-Code → mac-mini → offline
+Code → execution-host-b → offline
 ```
 
 结果必须是明确不可用，而不是：
 
-- 自动去 MacBook Pro 找同名目录；
+- 自动去当前或其他 execution host 找同名目录；
 - 扫描其他 host；
 - 改用未批准的路径；
 - 建立公网 Funnel 作为 fallback。
@@ -181,37 +181,40 @@ Code → mac-mini → offline
 例如：
 
 ```text
-code@mac-mini
-code@macbook-pro
+code@execution-host-a
+code@execution-host-b
 ```
 
 可以作为明确形式；自然语言别名必须最终映射到一个唯一 canonical id。
 
-## 初步实现方向
+## 当前实现方向
 
-优先评估最小实现：
+V2.2 Phase 1.2 已明确采用两层模型：
 
-1. Mac Mini 部署与 MacBook Pro 相同的 V2 private runtime；
-2. 为两个 host 建立独立的 Secure MCP Tunnel/App identity；
-3. 在 ChatGPT Plugin/Skill 层维护一个很小的 host/project registry；
-4. routing Skill 先解析 canonical project；
-5. 根据 registry 选择对应的 DevSpace backend；
-6. 再调用该 backend 的现有 `open_workspace`；
-7. 继续复用该 host 上已有 workspaceId。
+1. `config/devspace-projects.yaml` 是 canonical registry；
+2. 在线 Skill 只做 UX guidance，不作为 security/correctness boundary；
+3. 每个 private adapter 启动时加载 registry，registry 不可用/非法则启动失败；
+4. adapter 改写 `tools/list` 中 `open_workspace.path`，只向模型广告本 execution host 的 registered references；
+5. adapter 拦截 `tools/call open_workspace`，解析 canonical name / alias / exact registered path；
+6. 只有当前 backend 上唯一匹配的项目才改写为 exact registered `project.path` 并继续；
+7. unknown、unregistered path、ambiguous、wrong backend 一律 fail closed；
+8. 继续复用该 host 上已有 workspaceId。
 
-不要优先实现一个新的“大型中央代理服务”，除非 Plugin/App 能力无法满足上述最小模型。
+这样正常项目打开仍然只有一次 `open_workspace` round trip，同时即使 Skill 没有触发，也不能把 guessed path 送到 DevSpace。
 
-## 明天需要验证的问题
+未来 multi-host 仍优先采用多个彼此独立的 private runtime / Secure MCP Tunnel identity，而不是新增一个拥有所有 host 文件权限的大型中央代理。
 
-开发前先确认以下产品/runtime 能力，不凭假设实现：
+## 下一阶段需要验证的问题
+
+进入真正 multi-host 前确认以下产品/runtime 能力，不凭假设实现：
 
 1. 一个 DevSpace Plugin 是否可以可靠包含/选择多个 MCP Apps/backends；
-2. ChatGPT Skill 是否能够基于项目 registry 选择正确的 App/backend；
-3. 两个 Secure MCP Tunnel runtime 的 identity、alias 和权限如何最清晰地区分；
-4. Mac Mini 的 approved root 应采用什么稳定容器路径；
+2. ChatGPT 是否能够基于项目 registry 选择正确的 App/backend；Skill 本身不再被视为强制安全边界；
+3. 多个 Secure MCP Tunnel runtime 的 identity、alias 和权限如何最清晰地区分；
+4. 每个新增 execution host 的 approved root 应采用什么稳定容器路径；
 5. host offline 时 ChatGPT 会收到什么错误，如何保持 fail-closed；
 6. workspaceId 是否只在单一 backend/session 内有意义，切 host 时如何避免误复用；
-7. registry 存放位置（已决定）：仓库 canonical registry = `config/devspace-projects.yaml`；当前 ChatGPT online Skill = 内嵌、已同步的 registry snapshot（复制进 `SKILL.md`）；在线 Skill 不直接读取本 YAML。未来若产品支持随 Skill 一起发布 registry，可消除这份重复。
+7. registry 存放位置（已决定）：仓库 canonical registry = `config/devspace-projects.yaml`；adapter 直接加载 canonical registry；ChatGPT online Skill 只保留内嵌 UX snapshot。未来若产品支持随 Skill/Plugin 发布 registry，可消除 snapshot 重复；
 8. 多 host 情况下如何让用户仍然只看到一个自然语言入口，例如 `@DevSpace`。
 
 ## 验收目标
@@ -219,21 +222,21 @@ code@macbook-pro
 至少完成以下真实端到端场景：
 
 ```text
-@DevSpace 去 MyCode 列一下目录，只读
+@DevSpace 去 ProjectA 列一下目录，只读
 ```
 
-必须命中 MacBook Pro。
+必须命中注册 `ProjectA` 的 execution host A。
 
 ```text
-@DevSpace 去 Code 列一下目录，只读
+@DevSpace 去 ProjectB 列一下目录，只读
 ```
 
-必须命中 Mac Mini。
+必须命中注册 `ProjectB` 的 execution host B。
 
 然后分别验证：
 
-- 关闭 Mac Mini 后，Code 请求明确失败且不 fallback；
-- MacBook Pro 的 MyCode 仍正常；
+- 关闭 execution host B 后，ProjectB 请求明确失败且不 fallback；
+- execution host A 的 ProjectA 仍正常；
 - 两台 host 都不暴露 Funnel/public MCP endpoint；
 - 两台 host 都只暴露各自批准的项目 root；
 - 一个 host 的 credential/path 不能通过另一个 host 读取；
@@ -272,11 +275,13 @@ V2.1
 V2.0
 + natural-language project routing on one host
 
-V2.2 (planned)
+V2.2
 V2.1
 + explicit host/project registry
-+ multiple private DevSpace execution hosts
-+ natural-language host routing
++ adapter-enforced open_workspace routing
++ Skill as UX guidance, not security boundary
++ multiple private DevSpace execution hosts (next phase)
++ natural-language host routing (next phase)
 ```
 
-最终目标：ChatGPT 是统一控制入口；MacBook Pro、Mac Mini 或未来其他机器是相互隔离、按 registry 选择的私有执行节点。
+最终目标：ChatGPT 是统一控制入口；不同 macOS、Windows 或未来其他 execution host 都是相互隔离、按 registry 选择的私有执行节点。

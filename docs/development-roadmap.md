@@ -30,9 +30,17 @@ This is the default operating standard when ChatGPT or another coding executor w
 
 Form the inspection question and expected evidence first. Avoid a default pattern of one tiny read or shell call at a time when the required evidence is already predictable.
 
-### Rule 2 — Batch independent read-only checks
+### Rule 2 — Batch what is safe; serialize what is dependent or conflict-prone
 
-Independent checks should normally be grouped into one inspection snapshot, for example:
+Use this principle as the default concurrency rule:
+
+```text
+Safe and independent -> batch
+Data-dependent or write-conflict risk -> serialize
+Correctness first
+```
+
+Independent read-only checks should normally be grouped into one inspection snapshot, for example:
 
 ```text
 git status
@@ -43,6 +51,8 @@ git status
 ```
 
 Batching must not hide failures; commands should keep clear section labels and outputs.
+
+Do not parallelize operations when later work depends on earlier results, or when operations can race on shared mutable state. In particular, do **not** issue parallel edits/writes against the same file. Same-file mutations must be serialized, followed by inspection of the final diff/content before validation or commit.
 
 ### Rule 3 — Gather enough relevant code context in the first pass
 
@@ -250,18 +260,60 @@ Detailed routing design: [`roadmap-v2.2-multi-host-routing.md`](./roadmap-v2.2-m
 
 ### A. V2.2 registry-based routing foundation
 
-Status: Implemented locally; review approved; local commits pending push as of 2026-09-08.
+Status: Implemented, reviewed, and pushed (`7a3ae47` on 2026-09-09).
 
 Key invariants:
 
 ```text
 registered unique match -> execute
-ambiguous registered match -> ask
+ambiguous registered match -> ask/fail closed until disambiguated
 missing/unregistered -> fail closed
 registry unavailable -> fail closed
 ```
 
 Unknown names and unregistered absolute paths must never be synthesized into `open_workspace` paths.
+
+### A1. V2.2 live Skill E2E
+
+Status: Failed in live testing on 2026-09-09; root cause identified.
+
+The online Skill was not a guaranteed precondition for the `@DevSpace` App tool call. Repeated tests showed the model could still guess paths such as `/work/webmcp-bridge` and send unknown/unregistered paths to `open_workspace`. The lower Secret Firewall blocked traversal (`../../something`) but did not enforce registry membership.
+
+Conclusion: Skill-only routing is UX guidance, not a sufficient correctness/security boundary.
+
+### A2. Adapter-enforced registry routing
+
+Status: Implemented and validated locally on 2026-09-09; live deployment/E2E pending. Full repository check passes 164/164 tests plus lint/build.
+
+The private adapter is now the authoritative routing enforcement point:
+
+```text
+tools/list
+→ advertise registered open_workspace references
+
+tools/call open_workspace
+→ registry resolve
+→ current-backend check
+→ exact registered path rewrite
+→ existing Secret Firewall
+→ upstream DevSpace
+```
+
+Requirements:
+
+- canonical project name, registered alias, or exact registered absolute path may resolve;
+- guessed absolute paths and unknown project names are denied before upstream;
+- registry unavailable/invalid causes adapter startup failure;
+- with one registered host the adapter may infer it; with multiple hosts `DEVSPACE_HOST_ID` is mandatory;
+- a project registered to another backend fails closed until multi-backend selection is implemented;
+- no new MCP tool is added; the existing five-tool surface is preserved;
+- normal routing remains one `open_workspace` round trip.
+
+### A3. Repeat V2.2 six-case live E2E
+
+Status: Required after A2 is deployed.
+
+Phase 1.1/1.2 is closed only when canonical name, alias, missing project, unregistered absolute path, traversal, and read-only permission-preservation cases all behave as specified without creating guessed directories.
 
 ### B. DevSpace container auto-recovery
 
