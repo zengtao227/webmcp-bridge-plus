@@ -96,6 +96,21 @@ request path checks.
 
 The Secret Firewall is defense in depth; it does not replace sandbox isolation.
 
+## Host-executed runtime boundary
+
+Anything that DevSpace can modify must be treated as untrusted development input,
+including the checked-out repository under `~/Doc/My code` / `/work/My code`.
+No LaunchAgent, tunnel runtime, or other unattended host process may execute code
+through that writable tree or through a symlink that resolves into it.
+
+The private Tunnel therefore runs the adapter from a reviewed host-only snapshot
+under `~/Doc/devspace-container/runtime/webmcp-adapter`. The repository remains the
+canonical source, but deployment copies an exact Git-verified payload into an
+immutable release directory, verifies its manifest and file digests, then atomically
+switches a host-only `current` pointer. Runtime configuration such as
+`config/devspace-projects.yaml` changes only when a new reviewed snapshot is
+deployed.
+
 ## Reporting a vulnerability
 
 Do not open a public issue containing live credentials, private keys, session tokens, exploit payloads that expose real user data, or private infrastructure details.

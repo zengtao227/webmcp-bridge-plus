@@ -25,4 +25,4 @@ log:
 mcp:
   commands:
     - channel: main
-      command: "/Users/zengtao/.local/bin/webmcp-devspace-adapter"
+      command: "/Users/zengtao/Doc/devspace-container/runtime/webmcp-adapter/current/adapter/bin/start.js"

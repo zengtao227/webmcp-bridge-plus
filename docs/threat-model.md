@@ -190,6 +190,23 @@ No adapter or transport may bypass that boundary.
 - scan return content regardless of backend trust;
 - do not grant an MCP server access to DeepSeek session credentials.
 
+### T13 — Container-to-host execution through writable runtime code
+
+**Scenario:** DevSpace can modify a repository mounted read/write, while a host
+LaunchAgent or tunnel runtime later executes adapter code directly from that same
+tree (or through a symlink into it). Repository write access would then become a
+path to execute code as the host user.
+
+**Mitigations:**
+
+- no unattended host process executes code from the DevSpace-writable project tree;
+- Tunnel adapter runtime is deployed to a host-only directory outside the project mount;
+- deployment accepts only a clean, exact Git-tracked runtime payload;
+- releases contain regular copied files only, never repository symlinks;
+- each release has an exact manifest and aggregate payload digest;
+- `current` switches only after release verification and is updated atomically;
+- `config/devspace-projects.yaml` is canonical in Git but runtime reads the deployed copy.
+
 ## Out of scope for MVP
 
 The MVP intentionally does not attempt to secure capabilities it does not provide:

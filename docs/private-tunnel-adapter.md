@@ -76,8 +76,9 @@ tunnel-client，同时完全移除了可供其他本机进程连接的适配器�
 并通过 stdio 启动适配器。不会把一个没有调用方的 stdio 进程单独交给 launchd。
 首次运行会要求粘贴 Tunnel Runtime API key，并以 `0600` 权限保存到本机
 tunnel-client secrets 目录。卸载只移除本机 runtime，不会删除远端 tunnel：
-`./install-launchd.sh --uninstall`。安装器会创建无空格路径
-`~/.local/bin/webmcp-devspace-adapter`，避免 tunnel-client 把仓库路径里的空格误拆成参数。
+`./install-launchd.sh --uninstall`。安装器使用 host-only snapshot 的稳定 `current`
+入口启动适配器，不直接执行仓库路径：
+`~/Doc/devspace-container/runtime/webmcp-adapter/current/adapter/bin/start.js`。
 
 ### 2. 起 DevSpace（也是一次，之后就一直开着）
 

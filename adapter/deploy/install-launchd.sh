@@ -11,9 +11,12 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
-ENTRY="$REPO/adapter/bin/start.js"
-LAUNCHER_DIR="${TUNNEL_LAUNCHER_DIR:-$HOME/.local/bin}"
-LAUNCHER="$LAUNCHER_DIR/webmcp-devspace-adapter"
+DEPLOYER="$REPO/adapter/deploy/deploy-host-runtime.js"
+HOST_RUNTIME_ROOT="${WEBMCP_HOST_RUNTIME_ROOT:-$HOME/Doc/devspace-container/runtime/webmcp-adapter}"
+DEFAULT_WRITABLE_ROOT="$HOME/Doc/My code"
+EXTRA_WRITABLE_ROOT="${DEVSPACE_PROJECT_ROOT:-}"
+RUNTIME_ENTRY="$HOST_RUNTIME_ROOT/current/adapter/bin/start.js"
+LEGACY_LAUNCHER="$HOME/.local/bin/webmcp-devspace-adapter"
 ALIAS="${TUNNEL_ALIAS:-devspace}"
 PROFILE="${TUNNEL_PROFILE:-devspace}"
 PROFILE_DIR="${TUNNEL_PROFILE_DIR:-$HOME/.config/tunnel-client}"
@@ -40,7 +43,6 @@ if [ -z "$TUNNEL_CLIENT_BIN" ] || [ ! -x "$TUNNEL_CLIENT_BIN" ]; then
   echo "找不到 tunnel-client；可用 TUNNEL_CLIENT_BIN=/absolute/path 指定。" >&2
   exit 1
 fi
-
 status() {
   if ! launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
     echo "未加载 LaunchAgent：$LABEL" >&2
@@ -79,13 +81,186 @@ disable_plist() {
   mv "$source_plist" "$disabled_plist"
 }
 
-restore_existing_launch_agent() {
-  if [ "${had_service:-0}" -ne 1 ] || [ ! -f "$PLIST" ]; then
-    return
+ROLLBACK_DIR=""
+PLIST_CANDIDATE=""
+rollback_required=0
+had_current=0
+previous_current_target=""
+had_live_profile=0
+had_plist=0
+had_service=0
+
+capture_recoverable_state() {
+  if ! ROLLBACK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/webmcp-launchd-rollback.XXXXXX")"; then
+    echo "无法创建 activation rollback state directory。" >&2
+    return 1
   fi
-  launchctl enable "$DOMAIN/$LABEL" >/dev/null 2>&1 || true
-  launchctl bootstrap "$DOMAIN" "$PLIST" >/dev/null 2>&1 || true
+
+  if [ -L "$HOST_RUNTIME_ROOT/current" ]; then
+    had_current=1
+    if ! previous_current_target="$(readlink "$HOST_RUNTIME_ROOT/current")"; then
+      echo "无法读取 existing current target；拒绝进入激活流程。" >&2
+      return 1
+    fi
+  elif [ -e "$HOST_RUNTIME_ROOT/current" ]; then
+    echo "现有 host runtime current 不是符号链接；拒绝进入激活流程。" >&2
+    return 1
+  fi
+
+  if [ -e "$LIVE_PROFILE" ]; then
+    if [ ! -f "$LIVE_PROFILE" ] || [ -L "$LIVE_PROFILE" ]; then
+      echo "现有 LIVE_PROFILE 不是普通文件；拒绝进入激活流程：$LIVE_PROFILE" >&2
+      return 1
+    fi
+    had_live_profile=1
+    if ! cp -p "$LIVE_PROFILE" "$ROLLBACK_DIR/live-profile"; then
+      echo "无法备份 existing LIVE_PROFILE；拒绝进入激活流程。" >&2
+      return 1
+    fi
+  fi
+
+  if [ -e "$PLIST" ]; then
+    if [ ! -f "$PLIST" ] || [ -L "$PLIST" ]; then
+      echo "现有 plist 不是普通文件；拒绝进入激活流程：$PLIST" >&2
+      return 1
+    fi
+    had_plist=1
+    if ! cp -p "$PLIST" "$ROLLBACK_DIR/launch-agent.plist"; then
+      echo "无法备份 existing plist；拒绝进入激活流程。" >&2
+      return 1
+    fi
+  fi
+
+  if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
+    had_service=1
+    if [ "$had_plist" -ne 1 ]; then
+      echo "原 LaunchAgent 正在运行但没有可恢复 plist；拒绝进入激活流程。" >&2
+      return 1
+    fi
+  fi
 }
+
+restore_file_atomically() {
+  backup="$1"
+  destination="$2"
+  existed="$3"
+  temporary="$destination.rollback.$$"
+
+  if [ "$existed" -eq 1 ]; then
+    if [ ! -f "$backup" ]; then
+      echo "Rollback backup 缺失：$backup" >&2
+      return 1
+    fi
+    if ! cp -p "$backup" "$temporary" || ! mv -f "$temporary" "$destination"; then
+      rm -f "$temporary" >/dev/null 2>&1 || true
+      return 1
+    fi
+    return 0
+  fi
+
+  rm -f "$destination"
+}
+
+restore_previous_current() {
+  current_path="$HOST_RUNTIME_ROOT/current"
+  temporary_current="$HOST_RUNTIME_ROOT/.current-rollback.$$"
+
+  if [ "$had_current" -eq 1 ]; then
+    rm -f "$temporary_current" >/dev/null 2>&1 || true
+    if ! ln -s "$previous_current_target" "$temporary_current"; then
+      return 1
+    fi
+    if ! "$PYTHON3_BIN" - "$temporary_current" "$current_path" <<'PY'
+import os
+import sys
+
+os.replace(sys.argv[1], sys.argv[2])
+PY
+    then
+      rm -f "$temporary_current" >/dev/null 2>&1 || true
+      return 1
+    fi
+    return 0
+  fi
+
+  if [ -e "$current_path" ] && [ ! -L "$current_path" ]; then
+    echo "Rollback 拒绝删除非符号链接 current：$current_path" >&2
+    return 1
+  fi
+  rm -f "$current_path"
+}
+
+rollback_activation() {
+  rollback_failed=0
+  rollback_required=0
+
+  if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
+    if ! launchctl bootout "$DOMAIN/$LABEL" >/dev/null 2>&1; then
+      echo "ROLLBACK ERROR: 无法停止失败的新 LaunchAgent。" >&2
+      rollback_failed=1
+    fi
+  fi
+  if ! "$TUNNEL_CLIENT_BIN" runtimes stop "$ALIAS" >/dev/null 2>&1; then
+    echo "ROLLBACK ERROR: 无法停止失败的新 tunnel runtime。" >&2
+    rollback_failed=1
+  fi
+  if ! restore_previous_current; then
+    echo "ROLLBACK ERROR: 无法原子恢复 previous current。" >&2
+    rollback_failed=1
+  fi
+  if ! restore_file_atomically "$ROLLBACK_DIR/live-profile" "$LIVE_PROFILE" "$had_live_profile"; then
+    echo "ROLLBACK ERROR: 无法恢复旧 LIVE_PROFILE。" >&2
+    rollback_failed=1
+  fi
+  if ! restore_file_atomically "$ROLLBACK_DIR/launch-agent.plist" "$PLIST" "$had_plist"; then
+    echo "ROLLBACK ERROR: 无法恢复旧 plist。" >&2
+    rollback_failed=1
+  fi
+
+  if [ "$had_service" -eq 1 ]; then
+    if [ ! -f "$PLIST" ]; then
+      echo "ROLLBACK ERROR: 原 LaunchAgent 曾运行，但恢复后的 plist 不存在。" >&2
+      rollback_failed=1
+    else
+      if ! launchctl enable "$DOMAIN/$LABEL" >/dev/null 2>&1; then
+        echo "ROLLBACK ERROR: 无法重新 enable 原 LaunchAgent。" >&2
+        rollback_failed=1
+      fi
+      if ! launchctl bootstrap "$DOMAIN" "$PLIST" >/dev/null 2>&1; then
+        echo "ROLLBACK ERROR: 无法重新 bootstrap 原 LaunchAgent。" >&2
+        rollback_failed=1
+      fi
+    fi
+  fi
+
+  [ "$rollback_failed" -eq 0 ]
+}
+
+cleanup_activation_state() {
+  if [ -n "$PLIST_CANDIDATE" ]; then
+    rm -f "$PLIST_CANDIDATE" >/dev/null 2>&1 || true
+  fi
+  if [ -n "$ROLLBACK_DIR" ]; then
+    rm -rf "$ROLLBACK_DIR" >/dev/null 2>&1 || true
+  fi
+}
+
+on_exit() {
+  exit_code=$?
+  trap - EXIT
+  if [ "$exit_code" -ne 0 ] && [ "$rollback_required" -eq 1 ]; then
+    if rollback_activation; then
+      echo "激活失败；bounded rollback 已恢复 previous current/profile/plist，并按原状态恢复 LaunchAgent。" >&2
+    else
+      echo "ROLLBACK FAILED: 激活失败且旧服务状态未能完整恢复；请人工检查 current/profile/plist/LaunchAgent。" >&2
+      exit_code=70
+    fi
+  fi
+  cleanup_activation_state
+  exit "$exit_code"
+}
+
+trap on_exit EXIT
 
 case "${1:-}" in
   --status)
@@ -109,8 +284,41 @@ case "${1:-}" in
     ;;
 esac
 
-if [ ! -x "$ENTRY" ]; then
-  echo "适配器入口不存在或不可执行：$ENTRY" >&2
+NODE_BIN="${WEBMCP_RUNTIME_NODE_BIN:-$(command -v node || true)}"
+if [ -z "$NODE_BIN" ] || [ ! -x "$NODE_BIN" ]; then
+  echo "找不到 node；可用 WEBMCP_RUNTIME_NODE_BIN=/absolute/path 指定。" >&2
+  exit 1
+fi
+PYTHON3_BIN="${PYTHON3_BIN:-/usr/bin/python3}"
+if [ ! -x "$PYTHON3_BIN" ]; then
+  echo "找不到可执行 python3：$PYTHON3_BIN" >&2
+  exit 1
+fi
+PLUTIL_BIN="${PLUTIL_BIN:-$(command -v plutil || true)}"
+if [ -z "$PLUTIL_BIN" ] || [ ! -x "$PLUTIL_BIN" ]; then
+  echo "找不到 plutil；可用 PLUTIL_BIN=/absolute/path 指定。" >&2
+  exit 1
+fi
+if [ ! -f "$DEPLOYER" ]; then
+  echo "Host runtime deployer 不存在：$DEPLOYER" >&2
+  exit 1
+fi
+if [ ! -d "$DEFAULT_WRITABLE_ROOT" ]; then
+  echo "默认 DevSpace writable root 不存在：$DEFAULT_WRITABLE_ROOT" >&2
+  exit 1
+fi
+if [ -n "$EXTRA_WRITABLE_ROOT" ] && [ ! -d "$EXTRA_WRITABLE_ROOT" ]; then
+  echo "附加 DevSpace writable root 不存在：$EXTRA_WRITABLE_ROOT" >&2
+  exit 1
+fi
+READY_ATTEMPTS="${WEBMCP_READY_ATTEMPTS:-30}"
+READY_DELAY_SECONDS="${WEBMCP_READY_DELAY_SECONDS:-1}"
+if ! printf '%s' "$READY_ATTEMPTS" | grep -Eq '^[1-9][0-9]*$'; then
+  echo "WEBMCP_READY_ATTEMPTS 必须是正整数。" >&2
+  exit 1
+fi
+if ! printf '%s' "$READY_DELAY_SECONDS" | grep -Eq '^[0-9]+([.][0-9]+)?$'; then
+  echo "WEBMCP_READY_DELAY_SECONDS 必须是非负数字。" >&2
   exit 1
 fi
 
@@ -126,14 +334,8 @@ if ! printf '%s' "$TUNNEL_ID" | grep -Eq '^tunnel_[0-9a-f]{32}$'; then
   exit 1
 fi
 
-mkdir -p "$PROFILE_DIR" "$KEY_DIR" "$(dirname "$HEALTH_URL_FILE")" "$LAUNCHER_DIR" "$PLIST_DIR" "$LOG_DIR"
+mkdir -p "$PROFILE_DIR" "$KEY_DIR" "$(dirname "$HEALTH_URL_FILE")" "$PLIST_DIR" "$LOG_DIR"
 chmod 700 "$PROFILE_DIR" "$KEY_DIR"
-
-if [ -e "$LAUNCHER" ] && [ ! -L "$LAUNCHER" ]; then
-  echo "拒绝覆盖已有文件：$LAUNCHER" >&2
-  exit 1
-fi
-ln -sfn "$ENTRY" "$LAUNCHER"
 
 if [ ! -s "$KEY_FILE" ]; then
   runtime_key="${CONTROL_PLANE_API_KEY:-}"
@@ -152,51 +354,23 @@ if [ ! -s "$KEY_FILE" ]; then
 fi
 chmod 600 "$KEY_FILE"
 
-# Let tunnel-client generate a profile that matches its installed version, and
-# prove the tunnel/key/stdio target before replacing any working service.
-had_service=0
-if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
-  had_service=1
-  launchctl bootout "$DOMAIN/$LABEL" >/dev/null 2>&1 || true
-fi
-"$TUNNEL_CLIENT_BIN" runtimes stop "$ALIAS" >/dev/null 2>&1 || true
-if ! "$TUNNEL_CLIENT_BIN" runtimes connect \
-    --alias "$ALIAS" \
-    --profile "$PROFILE" \
-    --profile-dir "$PROFILE_DIR" \
-    --tunnel-id "$TUNNEL_ID" \
-    --runtime-api-key "file:$KEY_FILE" \
-    --mcp-command "$LAUNCHER"; then
-  "$TUNNEL_CLIENT_BIN" runtimes status "$ALIAS" --json >&2 || true
-  "$TUNNEL_CLIENT_BIN" runtimes stop "$ALIAS" >/dev/null 2>&1 || true
-  restore_existing_launch_agent
+# Save every state element needed for a bounded activation rollback before the
+# deployer changes `current` and before the first running Tunnel is interrupted.
+if ! capture_recoverable_state; then
+  echo "无法保存激活前状态；拒绝继续。" >&2
   exit 1
 fi
 
-status_json="$("$TUNNEL_CLIENT_BIN" runtimes status "$ALIAS" --json)"
-if ! printf '%s' "$status_json" | grep -Eq '"process_running"[[:space:]]*:[[:space:]]*true'; then
-  echo "$status_json" >&2
-  echo "临时 runtime 没有运行；拒绝安装 LaunchAgent。" >&2
-  "$TUNNEL_CLIENT_BIN" runtimes stop "$ALIAS" >/dev/null 2>&1 || true
-  restore_existing_launch_agent
-  exit 1
-fi
-if ! printf '%s' "$status_json" | grep -Eq '"ready"[[:space:]]*:[[:space:]]*true'; then
-  echo "$status_json" >&2
-  echo "临时 runtime 尚未 ready；拒绝安装 LaunchAgent。" >&2
-  "$TUNNEL_CLIENT_BIN" runtimes stop "$ALIAS" >/dev/null 2>&1 || true
-  restore_existing_launch_agent
-  exit 1
-fi
-
-# Generate the plist without interpolating values into XML markup.
-PLIST_LABEL="$LABEL" \
+# Generate the candidate plist into the LaunchAgents directory so its eventual
+# rename is atomic. Validate it before deploying or interrupting any service.
+PLIST_CANDIDATE="$(mktemp "$PLIST_DIR/.${LABEL}.candidate.XXXXXX")"
+if ! PLIST_LABEL="$LABEL" \
 PLIST_TUNNEL_CLIENT="$TUNNEL_CLIENT_BIN" \
 PLIST_PROFILE_DIR="$PROFILE_DIR" \
 PLIST_PROFILE="$PROFILE" \
 PLIST_STDOUT="$STDOUT_LOG" \
 PLIST_STDERR="$STDERR_LOG" \
-/usr/bin/python3 - "$PLIST" <<'PY'
+"$PYTHON3_BIN" - "$PLIST_CANDIDATE" <<'PY'
 import os
 import plistlib
 import sys
@@ -223,46 +397,126 @@ payload = {
 with open(sys.argv[1], "wb") as destination:
     plistlib.dump(payload, destination)
 PY
-chmod 600 "$PLIST"
-plutil -lint "$PLIST" >/dev/null
+then
+  echo "plist candidate 生成失败；现有 current/profile/plist/LaunchAgent 未切换。" >&2
+  exit 1
+fi
+chmod 600 "$PLIST_CANDIDATE"
+if ! "$PLUTIL_BIN" -lint "$PLIST_CANDIDATE" >/dev/null; then
+  echo "plist candidate 校验失败；现有 current/profile/plist/LaunchAgent 未切换。" >&2
+  exit 1
+fi
 
-# Replace the temporary detached process with the real login service. The key
-# remains a file reference in the generated profile and never enters the plist.
-launchctl bootout "$DOMAIN/$LABEL" >/dev/null 2>&1 || true
+# Build and verify the host-only adapter snapshot before interrupting the current
+# Tunnel. The default $HOME/Doc/My code boundary is enforced by the deployer;
+# DEVSPACE_PROJECT_ROOT, when present, is only an additional writable boundary.
+deploy_args=(
+  --source-root "$REPO"
+  --runtime-root "$HOST_RUNTIME_ROOT"
+)
+if [ -n "$EXTRA_WRITABLE_ROOT" ]; then
+  deploy_args+=(--project-root "$EXTRA_WRITABLE_ROOT")
+fi
+if ! "$NODE_BIN" "$DEPLOYER" "${deploy_args[@]}"; then
+  echo "Host-only adapter runtime 部署失败；保留现有 Tunnel 不变。" >&2
+  exit 1
+fi
+rollback_required=1
+if [ ! -x "$RUNTIME_ENTRY" ]; then
+  echo "已部署 runtime entrypoint 不可执行：$RUNTIME_ENTRY" >&2
+  exit 1
+fi
+
+# From this point onward, every failing exit goes through the same bounded
+# rollback in the EXIT trap.
+if [ "$had_service" -eq 1 ]; then
+  if ! launchctl bootout "$DOMAIN/$LABEL" >/dev/null 2>&1; then
+    echo "无法停止原 LaunchAgent；触发 bounded rollback。" >&2
+    exit 1
+  fi
+fi
 "$TUNNEL_CLIENT_BIN" runtimes stop "$ALIAS" >/dev/null 2>&1 || true
-: > "$HEALTH_URL_FILE"
-launchctl enable "$DOMAIN/$LABEL" >/dev/null 2>&1 || true
-if ! launchctl bootstrap "$DOMAIN" "$PLIST"; then
-  echo "LaunchAgent 加载失败；尝试恢复 tunnel-client 的临时托管进程。" >&2
-  "$TUNNEL_CLIENT_BIN" runtimes connect \
+if ! "$TUNNEL_CLIENT_BIN" runtimes connect \
     --alias "$ALIAS" \
     --profile "$PROFILE" \
     --profile-dir "$PROFILE_DIR" \
     --tunnel-id "$TUNNEL_ID" \
     --runtime-api-key "file:$KEY_FILE" \
-    --mcp-command "$LAUNCHER" >/dev/null 2>&1 || true
+    --mcp-command "$RUNTIME_ENTRY"; then
+  "$TUNNEL_CLIENT_BIN" runtimes status "$ALIAS" --json >&2 || true
+  echo "临时 runtime connect 失败；触发 bounded rollback。" >&2
+  exit 1
+fi
+
+if ! status_json="$("$TUNNEL_CLIENT_BIN" runtimes status "$ALIAS" --json)"; then
+  echo "无法读取临时 runtime 状态；触发 bounded rollback。" >&2
+  exit 1
+fi
+if ! printf '%s' "$status_json" | grep -Eq '"process_running"[[:space:]]*:[[:space:]]*true'; then
+  echo "$status_json" >&2
+  echo "临时 runtime 没有运行；触发 bounded rollback。" >&2
+  exit 1
+fi
+if ! printf '%s' "$status_json" | grep -Eq '"ready"[[:space:]]*:[[:space:]]*true'; then
+  echo "$status_json" >&2
+  echo "临时 runtime 尚未 ready；触发 bounded rollback。" >&2
+  exit 1
+fi
+
+# Atomically publish only the already-validated plist, then replace the detached
+# runtime with the real login service. The key remains a file reference.
+if ! mv -f "$PLIST_CANDIDATE" "$PLIST"; then
+  echo "无法原子发布已校验 plist；触发 bounded rollback。" >&2
+  exit 1
+fi
+PLIST_CANDIDATE=""
+if ! "$TUNNEL_CLIENT_BIN" runtimes stop "$ALIAS" >/dev/null 2>&1; then
+  echo "无法停止临时 runtime；触发 bounded rollback。" >&2
+  exit 1
+fi
+: > "$HEALTH_URL_FILE"
+if ! launchctl enable "$DOMAIN/$LABEL" >/dev/null 2>&1; then
+  echo "LaunchAgent enable 失败；触发 bounded rollback。" >&2
+  exit 1
+fi
+if ! launchctl bootstrap "$DOMAIN" "$PLIST"; then
+  echo "LaunchAgent bootstrap 失败；触发 bounded rollback。" >&2
   exit 1
 fi
 
 ready_now=0
-for _ in $(seq 1 30); do
+for _ in $(seq 1 "$READY_ATTEMPTS"); do
   if status >/dev/null 2>&1; then
     ready_now=1
     break
   fi
-  sleep 1
+  sleep "$READY_DELAY_SECONDS"
 done
 if [ "$ready_now" -ne 1 ]; then
   launchctl print "$DOMAIN/$LABEL" >&2 || true
   tail -30 "$STDERR_LOG" >&2 2>/dev/null || true
-  echo "LaunchAgent 未在 30 秒内 ready；旧 HTTP 适配器仍保持禁用。" >&2
+  echo "LaunchAgent 未在限定 readiness 窗口内 ready；触发 bounded rollback。" >&2
   exit 1
 fi
+
+# The new host-only service is proven ready. Activation rollback is no longer
+# armed; subsequent legacy cleanup remains outside the Phase A activation unit.
+rollback_required=0
 
 # Retire the obsolete standalone HTTP adapter only after the stdio tunnel is
 # proven ready. Keep its plist as a recoverable disabled artifact.
 launchctl bootout "$DOMAIN/$LEGACY_LABEL" >/dev/null 2>&1 || true
 disable_plist "$LEGACY_PLIST"
+
+# The pre-Phase-A launcher was a symlink back into the DevSpace-writable repo.
+# Remove only that exact legacy symlink after the host-only runtime is proven
+# ready; never delete an unrelated user file/symlink at the same location.
+if [ -L "$LEGACY_LAUNCHER" ]; then
+  legacy_target="$(readlink "$LEGACY_LAUNCHER" || true)"
+  if [ "$legacy_target" = "$REPO/adapter/bin/start.js" ]; then
+    rm "$LEGACY_LAUNCHER"
+  fi
+fi
 
 status
 echo "✔ Secure MCP Tunnel 已由 launchd 常驻：$LABEL"

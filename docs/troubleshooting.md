@@ -357,15 +357,15 @@ tunnel-client runtimes connect
 My code
 ```
 
-某些运行参数解析可能错误拆分路径。
+某些运行参数解析可能错误拆分路径，因此常驻 Tunnel 不应直接执行仓库里的 adapter entrypoint。
 
-安装流程会创建无空格 launcher 路径：
+当前 installer 会先部署 host-only snapshot，并让 tunnel-client 使用稳定的 `current` 入口：
 
 ```text
-~/.local/bin/webmcp-devspace-adapter
+~/Doc/devspace-container/runtime/webmcp-adapter/current/adapter/bin/start.js
 ```
 
-如果 launch/runtime 报找不到 adapter，检查最终 command 是否引用这个 launcher，而不是未经正确转义的仓库路径。
+如果 launch/runtime 报找不到 adapter，检查最终 `--mcp-command` 是否引用这个 host-only `current` snapshot，而不是仓库路径。
 
 ## 17. 坑：Docker mount 太宽
 
