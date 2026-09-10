@@ -124,7 +124,7 @@ Regardless of executor, the same scope, validation, safety, and review requireme
 
 The Web/DevSpace development executor acts as the change author and must not directly publish its own work to `main`. It may leave a reviewable working tree or, when explicitly requested, publish a `chatgpt/<task>` review branch.
 
-A separately invoked independent release reviewer may publish an approved final tree directly to `origin/main` only when the user explicitly authorized release-on-PASS, the reviewer independently inspects the complete final change set, all required validation passes, and no unresolved issue remains. Small reviewer-found fixes require a fresh final review and complete validation; substantive redesign returns to development rather than being self-approved by the reviewer.
+A separately invoked independent release reviewer may publish an approved final tree to `main` only when the user explicitly authorized release-on-PASS, the reviewer independently inspects the complete final change set, all required validation passes, and no unresolved issue remains. The reviewer reaches `main` via whichever mechanism the repository's actual branch protection permits — direct push, or push review branch + PR + required checks + self-merge — never by bypassing protection, and without handing the release back to development for either path. Small reviewer-found fixes require a fresh final review and complete validation; substantive redesign returns to development rather than being self-approved by the reviewer.
 
 This separation is the lightweight equivalent of author + PR reviewer/approver. See [`release-review-policy.md`](./release-review-policy.md) for the canonical release rules.
 

@@ -16,7 +16,7 @@ A DevSpace development executor must not push directly to `main` or merge its ow
 
 Commit and push capability is not permission to act automatically. If the user did not request commit or push, stop after the requested implementation and validation.
 
-An independently invoked release reviewer operating outside the Web/DevSpace development path is governed by [`docs/release-review-policy.md`](./docs/release-review-policy.md). When the user explicitly authorizes that independent review to publish on PASS, the reviewer may commit the independently reviewed final tree and push `origin/main` if all policy conditions are satisfied and no repository protection is bypassed.
+An independently invoked release reviewer operating outside the Web/DevSpace development path is governed by [`docs/release-review-policy.md`](./docs/release-review-policy.md). When the user explicitly authorizes that independent review to publish on PASS, and all policy conditions are satisfied, the reviewer carries the approved final tree to `main` via whichever mechanism the repository's actual branch protection permits (direct push, or push review branch + PR + required checks + self-merge) — never by bypassing branch protection.
 
 ## Safety boundary
 

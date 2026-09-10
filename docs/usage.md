@@ -180,7 +180,10 @@ independent release reviewer（例如独立运行的 Claude / Codex）
   ↓
 PASS 且用户已授权发布
   ↓
-reviewer commit approved final tree + push origin/main
+reviewer commit approved final tree
+  ↓
+按 main 实际 branch protection 发布：
+直接 push，或（要求 PR 时）push review branch + 开 PR + 等必需 check + 自己 merge
 ```
 
 对于 **Web/DevSpace development executor**：不得直接 push `main`，不得自行 merge
@@ -188,11 +191,20 @@ reviewer commit approved final tree + push origin/main
 `chatgpt/<task>` review branch。
 
 对于 **独立 release reviewer**：如果它不是本次 Web/DevSpace 开发执行者，并且用户在本次
-review 中明确授权“验证通过后发布”，则在完成独立 semantic/security review、完整 validation、
-确认无 unresolved issue 后，可直接 commit 并 push `origin/main`；不要求为了形式再创建一层
-review branch 或 PR。已有 repository protection 不得绕过。PASS 后应把本次流程作为 terminal
-release step 完成；如果 reviewer 环境客观上没有 main 发布能力，应立即报告 capability blocker，
-不要再把任务无意义地踢回 DevSpace 形成 agent ping-pong。
+review 中明确授权"验证通过后发布"，则在完成独立 semantic/security review、完整 validation、
+确认无 unresolved issue 后，负责把这次改动一路发布到 `main`——具体走哪条路径要看
+`main` 实际的 branch protection，不能假设：
+
+- `main` 允许直接 push：直接 commit 并 push `origin/main`，不要求为了形式再创建一层
+  review branch 或 PR；
+- `main` 要求 PR（开了 branch protection 后的常见情况）：reviewer 自己 push review branch、
+  开 PR、等 repository 要求的 status check 通过、自己 merge——不需要额外人工 approve，
+  也不需要在任何一步把任务交回 development executor。
+
+已有 repository protection 不得绕过；因为 repository 要求走 PR 而开 PR、自己 merge，
+这是在使用保护机制本身，不算绕过。PASS 后应把本次流程作为 terminal release step 一路完成；
+只有当 reviewer 环境**同时**没有直接 push 权限、也没有开/merge PR 的权限时，才是真正的
+capability blocker，应立即报告，不要再把任务无意义地踢回 DevSpace 形成 agent ping-pong。
 
 reviewer 如果只发现小范围、直接由审查产生的问题，可以修复后重新执行完整 final review；
 如果修复已经变成 substantive redesign 或明显扩大 scope，则必须停止发布并退回 development。
@@ -212,7 +224,9 @@ Firewall、Tunnel、Docker 隔离等安全敏感代码仍需要独立 review。
 
 ```text
 独立审查最终 change set。质量、正确性和安全优先于速度；完整 validation PASS 且无 blocker 后，
-无需再次确认，直接 commit approved final tree 并 push origin/main。若 FAIL 则停止发布并报告。
+无需再次确认，commit approved final tree，并按 main 实际 branch protection 一路发布完成
+（能直接 push 就直接 push；要求 PR 就自己开 PR、等必需 check 通过、自己 merge），不要交回
+DevSpace。若 FAIL 则停止发布并报告。
 ```
 
 ## 5. 常用只读命令请求

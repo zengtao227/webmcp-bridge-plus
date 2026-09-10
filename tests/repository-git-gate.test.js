@@ -28,16 +28,32 @@ test('DevSpace Git instructions keep development publication off main', async ()
   assert.match(instructions, /docs\/release-review-policy\.md/);
 });
 
-test('independent release policy requires review and explicit authorization before direct main publication', async () => {
+test('independent release policy requires review and explicit authorization before publication', async () => {
   const policy = await readFile(releasePolicyUrl, 'utf8');
   assert.match(policy, /user explicitly designated the run as an independent final review and authorized publication if it passes/);
   assert.match(policy, /independently inspected the final change set/);
   assert.match(policy, /npm run check/);
   assert.match(policy, /there is no unresolved issue or blocker/);
-  assert.match(policy, /push it directly to `origin\/main`/);
   assert.match(policy, /terminal release step/);
   assert.match(policy, /report that capability blocker immediately/);
   assert.match(policy, /- force-push;/);
   assert.match(policy, /material redesign/);
   assert.match(policy, /return the work to development/);
+});
+
+test('release policy is branch-protection-aware: direct push when allowed, PR + self-merge when required', async () => {
+  const policy = await readFile(releasePolicyUrl, 'utf8');
+  // Must not hard-code a single publication mechanism.
+  assert.match(policy, /must not assume a specific mechanism in advance/);
+  assert.match(policy, /pushes it directly to `origin\/main`/);
+  assert.match(policy, /requires a pull request/);
+  assert.match(policy, /opens a PR against `main`/);
+  assert.match(policy, /waits for the repository's required status check\(s\) to pass, and merges the PR itself/);
+  assert.match(policy, /No additional human reviewer or approval is required/);
+  assert.match(policy, /does not require a handoff back to the development executor/);
+  // Using the PR mechanism a protected repo requires is explicitly not "bypassing".
+  assert.match(policy, /is \*using\* the protection mechanism as intended, not bypassing it/);
+  assert.match(policy, /bypass configured branch protections/);
+  // A required PR/check gate alone must not be reported as a capability blocker.
+  assert.match(policy, /not, by itself, a capability blocker/);
 });
