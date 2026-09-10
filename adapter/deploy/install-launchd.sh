@@ -63,6 +63,35 @@ query_launch_agent_state() {
   return 1
 }
 
+wait_for_launch_agent_absent() {
+  local target_label attempts delay_seconds attempt launch_state
+  target_label="${1:-$LABEL}"
+  attempts="${WEBMCP_STOP_ATTEMPTS:-20}"
+  delay_seconds="${WEBMCP_STOP_DELAY_SECONDS:-0.25}"
+
+  if ! printf '%s' "$attempts" | grep -Eq '^[1-9][0-9]*$'; then
+    echo "WEBMCP_STOP_ATTEMPTS 必须是正整数。" >&2
+    return 1
+  fi
+  if ! printf '%s' "$delay_seconds" | grep -Eq '^[0-9]+([.][0-9]+)?$'; then
+    echo "WEBMCP_STOP_DELAY_SECONDS 必须是非负数字。" >&2
+    return 1
+  fi
+
+  for ((attempt = 1; attempt <= attempts; attempt += 1)); do
+    if ! launch_state="$(query_launch_agent_state "$target_label")"; then
+      return 1
+    fi
+    if [ "$launch_state" = "absent" ]; then
+      return 0
+    fi
+    if [ "$attempt" -lt "$attempts" ]; then
+      sleep "$delay_seconds"
+    fi
+  done
+  return 1
+}
+
 status() {
   if ! launch_state="$(query_launch_agent_state)"; then
     return 1
@@ -239,15 +268,10 @@ rollback_activation() {
         echo "ROLLBACK ERROR: 无法停止失败的新 LaunchAgent。" >&2
         rollback_failed=1
       fi
-      if launch_state="$(query_launch_agent_state)"; then
-        if [ "$launch_state" = "absent" ]; then
-          can_restore_service=1
-        else
-          echo "ROLLBACK ERROR: 失败的新 LaunchAgent 仍处于 loaded 状态。" >&2
-          rollback_failed=1
-        fi
+      if wait_for_launch_agent_absent "$LABEL"; then
+        can_restore_service=1
       else
-        echo "ROLLBACK ERROR: bootout 后无法确认 LaunchAgent 状态。" >&2
+        echo "ROLLBACK ERROR: bootout 后未能在限定时间内确认 LaunchAgent absent。" >&2
         rollback_failed=1
       fi
     else
@@ -345,7 +369,7 @@ case "${1:-}" in
         echo "无法停止当前 LaunchAgent；拒绝卸载。" >&2
         exit 1
       fi
-      if ! launch_state="$(query_launch_agent_state "$LABEL")" || [ "$launch_state" != "absent" ]; then
+      if ! wait_for_launch_agent_absent "$LABEL"; then
         echo "bootout 后无法确认当前 LaunchAgent 已停止；拒绝修改 plist。" >&2
         exit 1
       fi
@@ -360,7 +384,7 @@ case "${1:-}" in
         echo "无法停止 legacy LaunchAgent；拒绝修改 legacy plist。" >&2
         exit 1
       fi
-      if ! legacy_state="$(query_launch_agent_state "$LEGACY_LABEL")" || [ "$legacy_state" != "absent" ]; then
+      if ! wait_for_launch_agent_absent "$LEGACY_LABEL"; then
         echo "bootout 后无法确认 legacy LaunchAgent 已停止；拒绝修改 legacy plist。" >&2
         exit 1
       fi
@@ -530,12 +554,8 @@ if [ "$had_service" -eq 1 ]; then
     echo "无法停止原 LaunchAgent；触发 bounded rollback。" >&2
     exit 1
   fi
-  if ! launch_state="$(query_launch_agent_state)"; then
-    echo "停止原 LaunchAgent 后无法确认状态；触发 bounded rollback。" >&2
-    exit 1
-  fi
-  if [ "$launch_state" != "absent" ]; then
-    echo "停止原 LaunchAgent 后仍确认 loaded；触发 bounded rollback。" >&2
+  if ! wait_for_launch_agent_absent "$LABEL"; then
+    echo "停止原 LaunchAgent 后未能在限定时间内确认 absent；触发 bounded rollback。" >&2
     exit 1
   fi
 fi
@@ -618,15 +638,10 @@ if legacy_state="$(query_launch_agent_state "$LEGACY_LABEL")"; then
     if ! launchctl bootout "$DOMAIN/$LEGACY_LABEL" >/dev/null 2>&1; then
       echo "无法停止 legacy HTTP LaunchAgent；保留 legacy plist 不变。" >&2
       legacy_cleanup_failed=1
-    elif legacy_state="$(query_launch_agent_state "$LEGACY_LABEL")"; then
-      if [ "$legacy_state" = "absent" ]; then
-        disable_plist "$LEGACY_PLIST"
-      else
-        echo "legacy HTTP LaunchAgent bootout 后仍处于 loaded；保留 legacy plist 不变。" >&2
-        legacy_cleanup_failed=1
-      fi
+    elif wait_for_launch_agent_absent "$LEGACY_LABEL"; then
+      disable_plist "$LEGACY_PLIST"
     else
-      echo "legacy HTTP LaunchAgent bootout 后状态未知；保留 legacy plist 不变。" >&2
+      echo "legacy HTTP LaunchAgent bootout 后未能在限定时间内确认 absent；保留 legacy plist 不变。" >&2
       legacy_cleanup_failed=1
     fi
   else

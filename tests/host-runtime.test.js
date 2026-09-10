@@ -180,6 +180,7 @@ async function prepareInstallerScenario(root, overrides = {}) {
   const launchdState = path.join(root, 'launchd-state');
   const legacyLaunchdState = path.join(root, 'legacy-launchd-state');
   const legacyBootoutCount = path.join(root, 'legacy-bootout-count');
+  const mainBootoutPending = path.join(root, 'main-bootout-pending');
   const bootstrapCount = path.join(root, 'bootstrap-count');
 
   await mkdir(defaultWritableRoot, { recursive: true });
@@ -262,6 +263,17 @@ case "$command_name" in
       if [ "$FAKE_JOB_QUERY_ERROR_AFTER_BOOTSTRAP" = 1 ] && [ "$count" -ge 1 ]; then
         exit 5
       fi
+      if [ -f "$FAKE_MAIN_BOOTOUT_PENDING" ]; then
+        remaining="$(cat "$FAKE_MAIN_BOOTOUT_PENDING")"
+        if [ "$remaining" -gt 0 ]; then
+          printf '%s' "$((remaining - 1))" > "$FAKE_MAIN_BOOTOUT_PENDING"
+          echo '    pid = 4242'
+          exit 0
+        fi
+        rm -f "$FAKE_MAIN_BOOTOUT_PENDING"
+        printf stopped > "$FAKE_LAUNCHD_STATE"
+        state=stopped
+      fi
       if [ "$state" = running ]; then
         echo '    pid = 4242'
         exit 0
@@ -286,7 +298,11 @@ case "$command_name" in
       if [ "$FAKE_BOOTOUT_FAIL" = 1 ]; then
         exit 1
       fi
-      printf stopped > "$FAKE_LAUNCHD_STATE"
+      if [ "$FAKE_MAIN_BOOTOUT_DELAYED_QUERIES" -gt 0 ]; then
+        printf '%s' "$FAKE_MAIN_BOOTOUT_DELAYED_QUERIES" > "$FAKE_MAIN_BOOTOUT_PENDING"
+      else
+        printf stopped > "$FAKE_LAUNCHD_STATE"
+      fi
       exit 0
     fi
     if [ "$is_legacy" -eq 1 ]; then
@@ -407,10 +423,13 @@ exit 1
     PYTHON3_BIN: '/usr/bin/python3',
     WEBMCP_READY_ATTEMPTS: '1',
     WEBMCP_READY_DELAY_SECONDS: '0',
+    WEBMCP_STOP_ATTEMPTS: '1',
+    WEBMCP_STOP_DELAY_SECONDS: '0',
     FAKE_LOG: fakeLog,
     FAKE_LAUNCHD_STATE: launchdState,
     FAKE_LEGACY_LAUNCHD_STATE: legacyLaunchdState,
     FAKE_LEGACY_BOOTOUT_COUNT: legacyBootoutCount,
+    FAKE_MAIN_BOOTOUT_PENDING: mainBootoutPending,
     FAKE_BOOTSTRAP_COUNT: bootstrapCount,
     FAKE_HEALTH_FILE: healthFile,
     FAKE_CONNECT_FAIL: '0',
@@ -418,6 +437,7 @@ exit 1
     FAKE_BOOTSTRAP_FAIL_ONCE: '0',
     FAKE_BOOTSTRAP_FAIL_ALWAYS: '0',
     FAKE_BOOTOUT_FAIL: '0',
+    FAKE_MAIN_BOOTOUT_DELAYED_QUERIES: '0',
     FAKE_JOB_QUERY_ERROR: '0',
     FAKE_JOB_QUERY_ERROR_AFTER_BOOTSTRAP: '0',
     FAKE_JOB_FORCE_ABSENT: '0',
@@ -1009,6 +1029,20 @@ test('successful activation keeps the host-only current entrypoint and commits t
     );
     assert.ok(log.includes(`--mcp-command ${hostEntrypoint}`));
     assert.equal(log.includes(`--mcp-command ${path.join(scenario.sourceRepo, 'adapter', 'bin', 'start.js')}`), false);
+  });
+});
+
+test('activation tolerates bounded asynchronous launchd removal after bootout', async () => {
+  await withTempDir(async (root) => {
+    const scenario = await runInstallerScenario(root, {
+      FAKE_READY: '1',
+      FAKE_MAIN_BOOTOUT_DELAYED_QUERIES: '2',
+      WEBMCP_STOP_ATTEMPTS: '3',
+    });
+
+    assert.equal(scenario.code, 0, scenario.stderr);
+    assert.equal(await readFile(scenario.launchdState, 'utf8'), 'running');
+    assert.doesNotMatch(scenario.stderr, /bounded rollback|ROLLBACK FAILED/);
   });
 });
 
