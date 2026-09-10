@@ -1,8 +1,10 @@
 # V2.2 Roadmap：Multi-host DevSpace Routing
 
-- 状态：Planned
-- 计划开发时间：2026-09-09 起
-- 前置版本：V2.0 private Secure MCP Tunnel；V2.1 natural-language project routing
+- 状态：Deferred / moved to future `webmcp-bridge-plus`
+- 计划开发时间：TBD，仅在真实 multi-host / 外部用户需求出现后启动
+- 前置版本：稳定版 `webmcp-bridge`（single execution host）
+
+> 2026-09-10 决策：当前 `webmcp-bridge` 不继续产品化 multi-host。本文保留为未来独立项目 `webmcp-bridge-plus` 的设计输入；当前优先完成 Developer Efficiency 的量化优化与稳定化。
 
 ## 目标
 
@@ -241,7 +243,8 @@ V2.2 Phase 1.2 已明确采用两层模型：
 - 两台 host 都只暴露各自批准的项目 root；
 - 一个 host 的 credential/path 不能通过另一个 host 读取；
 - natural-language routing 不扩大 write/commit/push 权限；
-- 用户在第三台电脑登录 ChatGPT 网页版时也能通过同一个 ChatGPT-side routing 使用在线 host。
+- 用户在第三台电脑登录 ChatGPT 网页版时也能通过同一个 ChatGPT-side routing 使用在线 host；
+- `workspaceId` 绝不跨不同 backend/execution-host identity 复用——切换到另一台 host 时必须建立新的 workspaceId，不得沿用前一台 host 的会话身份。
 
 ## 非目标
 

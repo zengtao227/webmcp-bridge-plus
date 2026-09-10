@@ -145,17 +145,20 @@ Workspace identity should be reused for the same execution host/project instead 
 
 ### Phase 1 — workflow optimization without changing MCP surface
 
-Status: Planned / immediately applicable
+Status: Implemented / active measurement since 2026-09-10
 
 Actions:
 
 1. Use the rules above for direct DevSpace coding tasks.
-2. Batch independent shell/read-only inspections.
-3. Batch post-change validation.
-4. Reuse workspaceId for the same host/project.
-5. Record cases where repeated serial round trips were genuinely required by data dependencies.
+2. Use `npm run devspace:inspect` for the fixed repository snapshot (status, diff stat, diff check, recent commits) when those checks are relevant.
+3. Use `npm run devspace:validate` for the fixed final gate (diff check, complete repository check, final status).
+4. Batch task-specific read-only inspection around those fixed workflows instead of splitting predictable checks into separate tunnel round trips.
+5. Reuse workspaceId for the same host/project.
+6. Record real task evidence, including cases where repeated serial round trips were genuinely required by data dependencies.
 
-This phase requires **no new MCP tools** and therefore has minimal security impact.
+The first self-hosted benchmark is documented in [`developer-efficiency-benchmark.md`](./developer-efficiency-benchmark.md). This phase adds repository-local orchestration only: **no new MCP tools, permissions, host access, or security boundary changes**.
+
+Quality invariant: repository-local batching may replace only predictable mechanical round trips. It must **not** replace task-specific code/context inspection, semantic review of the final change set, or any validation required to establish correctness. When speed and confidence conflict, preserve the higher-confidence workflow even if it requires another DevSpace round trip.
 
 ### Measurements
 
@@ -172,7 +175,7 @@ Do not set an arbitrary latency target before a baseline exists.
 
 ### Phase 2 — optional read-only composite capabilities
 
-Status: Evaluate only if Phase 1 data shows meaningful remaining overhead
+Status: Not justified by the first 2026-09-10 benchmark; continue measuring real tasks before reconsidering
 
 Possible concepts:
 
@@ -352,28 +355,23 @@ Both the LaunchAgent and the host-side `dsup.sh --ensure` contract are now insta
 
 ### C. Developer Efficiency Phase 1
 
-Status: Begin immediately as an operating practice; document evidence while normal development continues.
+Status: IMPLEMENTED / active measurement from 2026-09-10.
 
-No runtime/MCP protocol changes required.
+Use the repository-local inspection/validation workflows on real development tasks and keep collecting comparable evidence before changing the MCP surface.
 
-### D. V2.2 multi-host live validation
+### D. Current project stabilization
 
-Status: Planned after routing foundation + reliable host lifecycle
+Status: Active after Developer Efficiency evidence is sufficient.
 
-Do not assume the second host is a Mac Mini.
+`webmcp-bridge` remains the stable single-execution-host project. Multi-host/productized work is intentionally out of current-project scope.
 
-Required live validation includes:
+### E. Future `webmcp-bridge-plus`
 
-- at least two independent execution hosts/backends;
-- unique project routes to the correct host;
-- ambiguous project identity asks instead of guessing;
-- missing project fails closed;
-- offline/unavailable registered host does not fall back to another host;
-- workspaceId is never reused across different backend identities;
-- each host preserves its own approved-root, credential, Docker/container, and Secret Firewall boundaries;
-- user can control the system from a third client device without the client holding the project files.
+Status: Deferred / separate future project, only when there is a real multi-host or external-user need.
 
-### E. Developer Efficiency Phase 2 decision
+The former V2.2 multi-host plan becomes input to `webmcp-bridge-plus` rather than an automatic next version of this repository. The security invariants remain useful, but implementation should not begin merely because the design exists.
+
+### F. Developer Efficiency Phase 2 decision
 
 After collecting enough real task data, decide whether read-only composite tools are justified.
 

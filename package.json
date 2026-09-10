@@ -11,6 +11,8 @@
     "test": "node --test",
     "lint": "node scripts/check-js.mjs",
     "build": "node scripts/build.mjs",
-    "check": "npm run lint && npm test && npm run build"
+    "check": "npm run lint && npm test && npm run build",
+    "devspace:inspect": "node scripts/devspace-efficiency.mjs inspect",
+    "devspace:validate": "node scripts/devspace-efficiency.mjs validate"
   }
 }

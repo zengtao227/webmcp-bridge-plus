@@ -39,6 +39,7 @@ For the current private DevSpace design and day-to-day operation, see:
 - [`docs/usage.md`](./docs/usage.md) — how to use `@DevSpace` safely in normal work;
 - [`docs/troubleshooting.md`](./docs/troubleshooting.md) — known pitfalls, failure modes, and investigation order;
 - [`docs/development-roadmap.md`](./docs/development-roadmap.md) — central roadmap, execution-host direction, and DevSpace Developer Efficiency operating standard.
+- [`docs/developer-efficiency-benchmark.md`](./docs/developer-efficiency-benchmark.md) — real-task benchmark method and measured DevSpace round-trip results.
 
 ## Security model
 
