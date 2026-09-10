@@ -62,6 +62,7 @@ async function createHarness(root, {
   bootstrapFailOnce = false,
   bootstrapFailAlways = false,
   bootoutFail = false,
+  bootoutDelayQueries = 0,
   jobQueryError = false,
   jobQueryErrorAfterBootstrap = false,
   launchdDomainAvailable = true,
@@ -78,6 +79,7 @@ async function createHarness(root, {
   const tmpDir = path.join(root, 'tmp');
   const fakeLog = path.join(root, 'fake.log');
   const launchdState = path.join(root, 'launchd-state');
+  const bootoutPending = path.join(root, 'bootout-pending');
   const bootstrapCount = path.join(root, 'bootstrap-count');
 
   await mkdir(projectRoot, { recursive: true });
@@ -87,6 +89,7 @@ async function createHarness(root, {
   await mkdir(tmpDir, { recursive: true });
   await writeFile(fakeLog, '');
   await writeFile(launchdState, running ? 'running' : 'stopped');
+  await writeFile(bootoutPending, '0');
   await writeFile(bootstrapCount, '0');
 
   if (dsupMode === 'inside-project') {
@@ -136,6 +139,14 @@ case "$command_name" in
       if [ "$FAKE_JOB_QUERY_ERROR_AFTER_BOOTSTRAP" = 1 ] && [ "$count" -ge 1 ]; then
         exit 5
       fi
+      if [ "$(cat "$FAKE_LAUNCHD_STATE")" = pending ]; then
+        remaining="$(cat "$FAKE_BOOTOUT_PENDING")"
+        if [ "$remaining" -gt 0 ]; then
+          printf '%s' "$((remaining - 1))" > "$FAKE_BOOTOUT_PENDING"
+          exit 0
+        fi
+        printf stopped > "$FAKE_LAUNCHD_STATE"
+      fi
       [ "$(cat "$FAKE_LAUNCHD_STATE")" = running ] && exit 0
       exit 113
     fi
@@ -146,7 +157,12 @@ case "$command_name" in
       if [ "$FAKE_BOOTOUT_FAIL" = 1 ]; then
         exit 1
       fi
-      printf stopped > "$FAKE_LAUNCHD_STATE"
+      if [ "$FAKE_BOOTOUT_DELAY_QUERIES" -gt 0 ]; then
+        printf pending > "$FAKE_LAUNCHD_STATE"
+        printf '%s' "$FAKE_BOOTOUT_DELAY_QUERIES" > "$FAKE_BOOTOUT_PENDING"
+      else
+        printf stopped > "$FAKE_LAUNCHD_STATE"
+      fi
       exit 0
     fi
     exit 1
@@ -198,10 +214,12 @@ exit 0
     PYTHON3_BIN: '/usr/bin/python3',
     FAKE_LOG: fakeLog,
     FAKE_LAUNCHD_STATE: launchdState,
+    FAKE_BOOTOUT_PENDING: bootoutPending,
     FAKE_BOOTSTRAP_COUNT: bootstrapCount,
     FAKE_BOOTSTRAP_FAIL_ONCE: bootstrapFailOnce ? '1' : '0',
     FAKE_BOOTSTRAP_FAIL_ALWAYS: bootstrapFailAlways ? '1' : '0',
     FAKE_BOOTOUT_FAIL: bootoutFail ? '1' : '0',
+    FAKE_BOOTOUT_DELAY_QUERIES: String(bootoutDelayQueries),
     FAKE_JOB_QUERY_ERROR: jobQueryError ? '1' : '0',
     FAKE_JOB_QUERY_ERROR_AFTER_BOOTSTRAP: jobQueryErrorAfterBootstrap ? '1' : '0',
     FAKE_PLUTIL_FAIL_CANDIDATE: plutilFailCandidate ? '1' : '0',
@@ -209,6 +227,8 @@ exit 0
     FAKE_DOMAIN_AVAILABLE: launchdDomainAvailable ? '1' : '0',
     FAKE_DOMAIN: domain,
     FAKE_LABEL: label,
+    WEBMCP_RECOVERY_STOP_ATTEMPTS: '10',
+    WEBMCP_RECOVERY_STOP_DELAY_SECONDS: '0',
   };
 
   return {
@@ -455,6 +475,21 @@ test('bootout failure with service still loaded leaves previous state untouched'
   });
 });
 
+test('activation tolerates bounded asynchronous launchd removal after bootout', async () => {
+  await withTempDir(async (root) => {
+    const harness = await createHarness(root, {
+      existingPlist: true,
+      running: true,
+      bootoutDelayQueries: 2,
+    });
+    const result = await runInstaller(harness);
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(await readFile(harness.launchdState, 'utf8'), 'running');
+    assert.equal(await readFile(harness.bootstrapCount, 'utf8'), '1');
+    assert.match(await readFile(harness.fakeLog, 'utf8'), /launchctl bootout/);
+  });
+});
+
 test('bootstrap failure restores previous plist and running LaunchAgent', async () => {
   await withTempDir(async (root) => {
     const harness = await createHarness(root, {
@@ -520,6 +555,20 @@ test('repeated installation is idempotent and does not restart an identical load
     assert.equal(await readFile(harness.plist, 'utf8'), firstPlist);
     assert.equal(await readFile(harness.bootstrapCount, 'utf8'), '1');
     assert.equal(await readFile(harness.launchdState, 'utf8'), 'running');
+  });
+});
+
+test('uninstall tolerates bounded asynchronous launchd removal after bootout', async () => {
+  await withTempDir(async (root) => {
+    const harness = await createHarness(root);
+    const installed = await runInstaller(harness);
+    assert.equal(installed.code, 0, installed.stderr);
+
+    harness.env.FAKE_BOOTOUT_DELAY_QUERIES = '2';
+    const uninstalled = await runInstaller(harness, ['--uninstall']);
+    assert.equal(uninstalled.code, 0, uninstalled.stderr);
+    assert.equal(await exists(harness.plist), false);
+    assert.equal(await readFile(harness.launchdState, 'utf8'), 'stopped');
   });
 });
 

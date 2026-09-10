@@ -62,6 +62,36 @@ query_service_state() {
   return 1
 }
 
+wait_for_service_absent() {
+  local attempts delay_seconds attempt service_state
+  attempts="${WEBMCP_RECOVERY_STOP_ATTEMPTS:-20}"
+  delay_seconds="${WEBMCP_RECOVERY_STOP_DELAY_SECONDS:-0.25}"
+
+  if ! printf '%s' "$attempts" | grep -Eq '^[1-9][0-9]*$'; then
+    echo "ERROR: WEBMCP_RECOVERY_STOP_ATTEMPTS 必须是正整数。" >&2
+    return 1
+  fi
+  if ! printf '%s' "$delay_seconds" | grep -Eq '^[0-9]+([.][0-9]+)?$'; then
+    echo "ERROR: WEBMCP_RECOVERY_STOP_DELAY_SECONDS 必须是非负数字。" >&2
+    return 1
+  fi
+
+  attempt=1
+  while [ "$attempt" -le "$attempts" ]; do
+    if ! service_state="$(query_service_state)"; then
+      return 1
+    fi
+    if [ "$service_state" = "absent" ]; then
+      return 0
+    fi
+    if [ "$attempt" -lt "$attempts" ]; then
+      sleep "$delay_seconds"
+    fi
+    attempt=$((attempt + 1))
+  done
+  return 1
+}
+
 assert_launchd_domain() {
   if ! "$LAUNCHCTL_BIN" print "$DOMAIN" >/dev/null 2>&1; then
     echo "ERROR: launchctl 无法读取 per-user domain：$DOMAIN" >&2
@@ -108,15 +138,10 @@ rollback_install() {
         echo "ROLLBACK ERROR: 无法停止 partially activated LaunchAgent。" >&2
         rollback_failed=1
       fi
-      if service_state="$(query_service_state)"; then
-        if [ "$service_state" = "absent" ]; then
-          can_restore_service=1
-        else
-          echo "ROLLBACK ERROR: partially activated LaunchAgent 仍处于 loaded 状态。" >&2
-          rollback_failed=1
-        fi
+      if wait_for_service_absent; then
+        can_restore_service=1
       else
-        echo "ROLLBACK ERROR: bootout 后无法确认 LaunchAgent 状态。" >&2
+        echo "ROLLBACK ERROR: bootout 后未能在限定时间内确认 LaunchAgent absent。" >&2
         rollback_failed=1
       fi
     else
@@ -281,11 +306,8 @@ uninstall() {
     if ! "$LAUNCHCTL_BIN" bootout "$DOMAIN/$LABEL" >/dev/null 2>&1; then
       fail "无法停止 LaunchAgent：$LABEL"
     fi
-    if ! service_state="$(query_service_state)"; then
-      fail "bootout 后无法确认 LaunchAgent 状态；拒绝删除 plist。"
-    fi
-    if [ "$service_state" != "absent" ]; then
-      fail "bootout 后 LaunchAgent 仍处于 loaded 状态；拒绝删除 plist。"
+    if ! wait_for_service_absent; then
+      fail "bootout 后未能在限定时间内确认 LaunchAgent absent；拒绝删除 plist。"
     fi
   fi
 
@@ -380,18 +402,13 @@ if [ "$had_service" -eq 1 ]; then
   if ! "$LAUNCHCTL_BIN" bootout "$DOMAIN/$LABEL" >/dev/null 2>&1; then
     bootout_failed=1
   fi
-  if ! service_state="$(query_service_state)"; then
-    rollback_required=1
-    echo "ERROR: bootout 后无法确认 previous LaunchAgent 状态；触发 rollback。" >&2
-    exit 1
-  fi
-  if [ "$service_state" = "loaded" ]; then
+  if ! wait_for_service_absent; then
     if [ "$bootout_failed" -eq 1 ]; then
       echo "ERROR: 无法停止 previous LaunchAgent；原服务仍在运行，未修改 plist。" >&2
       exit 1
     fi
     rollback_required=1
-    echo "ERROR: launchctl bootout 返回成功但 LaunchAgent 仍 loaded；触发 rollback。" >&2
+    echo "ERROR: bootout 后未能在限定时间内确认 previous LaunchAgent absent；触发 rollback。" >&2
     exit 1
   fi
   if [ "$bootout_failed" -eq 1 ]; then
