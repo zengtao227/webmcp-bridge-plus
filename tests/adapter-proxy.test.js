@@ -169,6 +169,32 @@ test('re-authenticates and retries once when DevSpace rejects the token', async 
   }
 });
 
+test('discards a stale client registration and retries once after a DevSpace replacement', async () => {
+  const fake = await startFakeDevSpace({ ownerToken: OWNER });
+  const adapter = await startAdapter(fake);
+  try {
+    const first = await mcpRequest(adapter.url, { jsonrpc: '2.0', id: 1, method: 'initialize' });
+    assert.equal(first.status, 200);
+    assert.equal(fake.state.registeredClients.length, 1);
+
+    // Container replacement: DevSpace forgets the client registration and
+    // every token, so the very next request comes back 401 immediately.
+    fake.state.replaceDevSpace();
+
+    const second = await mcpRequest(adapter.url, { jsonrpc: '2.0', id: 2, method: 'tools/list' });
+    assert.equal(second.status, 200);
+
+    // The bounded single retry must have re-registered from scratch instead
+    // of presenting the now-unrecognized clientId again.
+    assert.equal(fake.state.registeredClients.length, 2);
+    assert.equal(fake.state.mcpCalls.at(-1).presented, 'at-2');
+    assert.ok(adapter.events.some((entry) => entry.event === 'upstream_unauthorized_retry'));
+  } finally {
+    await adapter.close();
+    await fake.close();
+  }
+});
+
 test('never advertises OAuth metadata, so the tunnel stays in unauthenticated-target mode', async () => {
   const fake = await startFakeDevSpace({ ownerToken: OWNER });
   const adapter = await startAdapter(fake);

@@ -93,6 +93,31 @@ test('falls back to a full authorization when refresh fails', async () => {
   }
 });
 
+test('re-registers with a new clientId when refresh fails after a DevSpace replacement', async () => {
+  const fake = await startFakeDevSpace({ ownerToken: OWNER, accessTtlSeconds: 600 });
+  let nowMs = Date.now();
+  try {
+    const client = makeClient(fake, { refreshSkewSeconds: 300, now: () => nowMs });
+    assert.equal(await client.getAccessToken(), 'at-1');
+    assert.equal(fake.state.registeredClients.length, 1);
+
+    // Enter the refresh window, then simulate the container being replaced:
+    // the server-side client registration and every token it issued are gone,
+    // even though the adapter still has them cached.
+    nowMs += 400_000;
+    fake.state.replaceDevSpace();
+
+    assert.equal(await client.getAccessToken(), 'at-2');
+
+    // A stale clientId must never be reused after the reset; the adapter has
+    // to discover/register/authorize from scratch.
+    assert.equal(fake.state.registeredClients.length, 2);
+    assert.equal(fake.state.lastAuthorization.clientId, 'client-2');
+  } finally {
+    await fake.close();
+  }
+});
+
 test('fails closed when the owner password is rejected', async () => {
   const fake = await startFakeDevSpace({ ownerToken: OWNER });
   try {

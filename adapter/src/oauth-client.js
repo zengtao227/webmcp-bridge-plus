@@ -155,10 +155,22 @@ export class DevSpaceOAuthClient {
   }
 
   invalidate() {
-    if (this.#token) {
-      this.#token = null;
+    if (this.#token || this.#client || this.#metadata) {
+      this.#resetOAuthState();
       this.#log('token_invalidated', {});
     }
+  }
+
+  // A backend replacement (e.g. a DevSpace container swap) drops server-side
+  // dynamic client registration along with the token store. Clearing only the
+  // token here would leave a stale #client cached, so the next authorization
+  // attempt keeps presenting a clientId the server no longer recognizes.
+  // Resetting all three together guarantees a fresh discovery/registration
+  // round trip whenever the adapter can no longer trust what it has cached.
+  #resetOAuthState() {
+    this.#token = null;
+    this.#client = null;
+    this.#metadata = null;
   }
 
   async #establish() {
@@ -168,7 +180,7 @@ export class DevSpaceOAuthClient {
         this.#log('token_refreshed', {});
         return this.#token.accessToken;
       } catch (error) {
-        this.#token = null;
+        this.#resetOAuthState();
         this.#log('token_refresh_failed', { code: error.code ?? 'UNKNOWN' });
       }
     }

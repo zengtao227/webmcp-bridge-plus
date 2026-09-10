@@ -34,6 +34,7 @@ export async function startFakeDevSpace({
     toolResult,
     requests: [],
     registeredClients: [],
+    registeredClientIds: new Set(),
     tokenCounter: 0,
     accessTokens: new Map(),
     refreshTokens: new Map(),
@@ -42,6 +43,16 @@ export async function startFakeDevSpace({
     failNextTokenRequest: false,
     issueSessions: false,
     sessionCounter: 0,
+  };
+
+  // Simulates a DevSpace container replacement: the server forgets every
+  // dynamic client registration, access token and refresh token it issued
+  // before, while discovery metadata (issuer/endpoints) stays the same
+  // because it is not container-scoped.
+  state.replaceDevSpace = () => {
+    state.registeredClientIds.clear();
+    state.accessTokens.clear();
+    state.refreshTokens.clear();
   };
 
   const server = createServer(async (req, res) => {
@@ -78,7 +89,9 @@ export async function startFakeDevSpace({
 
     if (url.pathname === '/register' && req.method === 'POST') {
       state.registeredClients.push(JSON.parse(raw));
-      json(res, 201, { client_id: `client-${state.registeredClients.length}` });
+      const clientId = `client-${state.registeredClients.length}`;
+      state.registeredClientIds.add(clientId);
+      json(res, 201, { client_id: clientId });
       return;
     }
 
@@ -86,6 +99,12 @@ export async function startFakeDevSpace({
       if (form?.get('owner_token') !== ownerToken) {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
         res.end(HTML_FORM);
+        return;
+      }
+      // Mirrors what a real DevSpace does after a container replacement: a
+      // clientId from a prior registration is no longer recognized.
+      if (!state.registeredClientIds.has(form.get('client_id'))) {
+        json(res, 400, { error: 'invalid_client' });
         return;
       }
       const redirect = new URL(form.get('redirect_uri'));
@@ -106,6 +125,10 @@ export async function startFakeDevSpace({
       if (state.failNextTokenRequest) {
         state.failNextTokenRequest = false;
         json(res, 400, { error: 'invalid_grant' });
+        return;
+      }
+      if (!state.registeredClientIds.has(form?.get('client_id'))) {
+        json(res, 400, { error: 'invalid_client' });
         return;
       }
       const grantType = form?.get('grant_type');
