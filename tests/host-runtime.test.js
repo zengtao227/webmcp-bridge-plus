@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
 import { once } from 'node:events';
 import {
+  appendFile,
   chmod,
   copyFile,
   lstat,
@@ -45,25 +46,30 @@ async function git(cwd, args) {
 
 async function createCleanRepository(root) {
   const sourceRoot = path.join(root, 'repo-under-test');
+  const currentRuntimeChanges = [
+    'adapter/deploy/deploy-host-runtime.js',
+    'adapter/deploy/install-launchd.sh',
+    'adapter/src/core.js',
+    'adapter/src/project-registry.js',
+  ];
   await execFileAsync('git', ['clone', '--quiet', '--no-hardlinks', REPO_ROOT, sourceRoot], {
     encoding: 'utf8',
     maxBuffer: 8 * 1024 * 1024,
   });
 
-  for (const relativePath of [
-    'adapter/deploy/deploy-host-runtime.js',
-    'adapter/deploy/install-launchd.sh',
-    'adapter/src/core.js',
-  ]) {
+  for (const relativePath of currentRuntimeChanges) {
     await copyFile(path.join(REPO_ROOT, relativePath), path.join(sourceRoot, relativePath));
   }
 
-  await git(sourceRoot, [
-    'add',
-    'adapter/deploy/deploy-host-runtime.js',
-    'adapter/deploy/install-launchd.sh',
-    'adapter/src/core.js',
-  ]);
+  // The clone may already contain every runtime change (as it does in CI).
+  // Always create a distinct, valid candidate commit so upgrade fixtures have
+  // both HEAD and HEAD^ without depending on a dirty caller worktree.
+  await appendFile(
+    path.join(sourceRoot, 'adapter', 'src', 'project-registry.js'),
+    '\n// Test-only host runtime candidate revision.\n',
+  );
+
+  await git(sourceRoot, ['add', ...currentRuntimeChanges]);
   await git(sourceRoot, [
     '-c', 'user.name=Host Runtime Test',
     '-c', 'user.email=host-runtime@example.invalid',
@@ -527,6 +533,8 @@ test('deployer CLI executes when invoked through a filesystem path alias', async
     const sourceRoot = await createCleanRepository(tempRoot);
     const sourceAlias = path.join(tempRoot, 'repo-alias');
     const runtimeRoot = path.join(tempRoot, 'runtime');
+    const fakeHome = path.join(tempRoot, 'home');
+    await mkdir(path.join(fakeHome, 'Doc', 'My code'), { recursive: true });
     await symlink(sourceRoot, sourceAlias, 'dir');
 
     const { stdout } = await execFileAsync(process.execPath, [
@@ -535,6 +543,7 @@ test('deployer CLI executes when invoked through a filesystem path alias', async
       '--runtime-root', runtimeRoot,
     ], {
       encoding: 'utf8',
+      env: { ...process.env, HOME: fakeHome },
       maxBuffer: 8 * 1024 * 1024,
     });
 

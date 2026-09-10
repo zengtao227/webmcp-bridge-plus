@@ -96,6 +96,24 @@ request path checks.
 
 The Secret Firewall is defense in depth; it does not replace sandbox isolation.
 
+### Git publication from DevSpace
+
+DevSpace may advertise Git read/write commands, including commit and push, as an
+explicitly supported use of its workspace shell. This does not grant access to a
+personal GitHub credential or permission to update the default branch directly.
+
+For `webmcp-bridge`, remote publication must use a repository-scoped, revocable
+credential that cannot access other repositories. GitHub protects `main`; the
+DevSpace identity may publish only review branches such as `chatgpt/*`. It must
+not receive repository administration, Actions/workflow write, secrets, tag
+deletion, force-push, or protection-bypass capability.
+
+The repository credential is still readable by processes inside the DevSpace
+container and must therefore be treated as potentially compromised. Branch
+protection, narrow repository scope, revocability, and the absence of access to
+other private repositories are the security boundary. Never mount the owner's
+general-purpose SSH key, GitHub CLI token, or credential store.
+
 ## Host-executed runtime boundary
 
 Anything that DevSpace can modify must be treated as untrusted development input,
@@ -131,3 +149,5 @@ Changes require security-focused tests when they affect:
 - persistence/storage.
 
 Any new Chrome permission or new class of tool capability must also update `docs/threat-model.md`.
+Any new Git publication credential or change to its repository/branch scope
+requires the same security review.

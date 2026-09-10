@@ -207,6 +207,26 @@ path to execute code as the host user.
 - `current` switches only after release verification and is updated atomically;
 - `config/devspace-projects.yaml` is canonical in Git but runtime reads the deployed copy.
 
+### T14 — DevSpace Git publication credential abuse
+
+**Scenario:** A model, malicious repository instruction, or compromised process
+uses the DevSpace Git credential to publish unintended commits or to attack
+repositories outside the approved scope.
+
+**Mitigations:**
+
+- use a dedicated, revocable credential scoped only to `webmcp-bridge`;
+- never expose the owner's normal SSH key, GitHub CLI token, or credential store;
+- protect `main` and require the repository CI gate before merge;
+- permit the DevSpace identity to publish review branches such as `chatgpt/*`,
+  but not to force-push, delete refs/tags, administer the repository, write
+  workflows/secrets, or bypass branch protection;
+- advertise Git writes as supported without making commit/push automatic.
+
+**Residual risk:** Any process in the DevSpace container can use or copy the
+repository-scoped credential. Treat it as potentially compromised and revoke it
+if unexpected branches or authentication activity appear.
+
 ## Out of scope for MVP
 
 The MVP intentionally does not attempt to secure capabilities it does not provide:

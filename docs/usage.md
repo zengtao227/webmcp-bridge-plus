@@ -159,9 +159,11 @@ Step 9 push
 
 ## 4. Commit / Push 建议
 
-不要把“修改代码”和“push 到远端”当成同一个动作。
+`@DevSpace` 可以执行 Git read/write 操作，包括 `git add`、`git commit` 和
+`git push`。这是一项可用能力，不是自动授权：只有用户在当前任务中明确要求
+commit / push 时才执行。
 
-推荐分 gate：
+本仓库的发布边界是：
 
 ```text
 修改
@@ -170,14 +172,23 @@ Step 9 push
   ↓
 review working tree
   ↓
-commit
+commit 到 chatgpt/<task> branch
   ↓
-review commit
+push 该 branch
   ↓
-push
+main 的 PR / CI gate
 ```
 
-尤其是 adapter、认证、Secret Firewall、Tunnel、Docker 隔离等安全敏感代码，应始终这样做。
+不得直接 push `main`，不得 force-push、删除远端 ref/tag、改写历史、修改 Git
+credential/remote 或自行 merge。adapter、认证、Secret Firewall、Tunnel、Docker
+隔离等安全敏感代码仍需要独立 review。
+
+推荐请求：
+
+```text
+完成修改和 npm run check；检查最终 diff 后提交到 chatgpt/<简短任务名>，
+并 push 这个功能分支。不要直接 push main，不要 force-push。
+```
 
 ## 5. 常用只读命令请求
 

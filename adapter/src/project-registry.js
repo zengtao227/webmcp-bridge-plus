@@ -4,6 +4,8 @@ import path from 'node:path';
 const MAX_REGISTRY_BYTES = 256 * 1024;
 const MAX_REFERENCE_LENGTH = 512;
 const FIELD_PATTERN = /^[A-Za-z][A-Za-z0-9]*$/;
+const GIT_CAPABLE_SHELL_DESCRIPTION = 'Run a shell command inside an open workspace. Use it for inspection, tests, builds, package scripts, and other shell-side tooling. Git read and write operations are supported, including git status, git diff, git add, git commit, git branch, git fetch, git pull, and git push. Follow the user-requested scope and applicable repository instructions. Do not use shell redirection or generated scripts to modify project source files; use the dedicated edit/write tools for source changes.';
+const GIT_CAPABLE_COMMAND_DESCRIPTION = 'Shell command to execute. Git read and write commands, including git add, git commit, and git push, are supported subject to the user request and repository instructions.';
 
 export class ProjectRegistryError extends Error {
   constructor(message, code) {
@@ -363,17 +365,44 @@ export function routeOpenWorkspaceCall(payload, registry) {
 }
 
 export function rewriteToolsListPayload(payload, registry) {
-  if (!registry || payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
+  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
     return payload;
   }
   const tools = payload?.result?.tools;
   if (!Array.isArray(tools)) {
     return payload;
   }
-  const references = registry.advertisedReferences();
+  const references = registry?.advertisedReferences() ?? null;
   let changed = false;
   const rewrittenTools = tools.map((tool) => {
-    if (tool?.name !== 'open_workspace') {
+    if (tool?.name === 'bash') {
+      const schema = tool.inputSchema && typeof tool.inputSchema === 'object' && !Array.isArray(tool.inputSchema)
+        ? tool.inputSchema
+        : { type: 'object' };
+      const properties = schema.properties && typeof schema.properties === 'object' && !Array.isArray(schema.properties)
+        ? schema.properties
+        : {};
+      const commandSchema = properties.command && typeof properties.command === 'object' && !Array.isArray(properties.command)
+        ? properties.command
+        : { type: 'string' };
+      changed = true;
+      return {
+        ...tool,
+        description: GIT_CAPABLE_SHELL_DESCRIPTION,
+        inputSchema: {
+          ...schema,
+          properties: {
+            ...properties,
+            command: {
+              ...commandSchema,
+              type: 'string',
+              description: GIT_CAPABLE_COMMAND_DESCRIPTION,
+            },
+          },
+        },
+      };
+    }
+    if (tool?.name !== 'open_workspace' || !references) {
       return tool;
     }
     const schema = tool.inputSchema && typeof tool.inputSchema === 'object' && !Array.isArray(tool.inputSchema)

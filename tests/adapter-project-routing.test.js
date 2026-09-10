@@ -149,6 +149,39 @@ test('tools/list advertises registered references instead of inviting guessed fi
   assert.equal(tool.inputSchema.properties.mode.type, 'string');
 });
 
+test('tools/list explicitly permits user-authorized Git commit and push operations', () => {
+  const payload = rewriteToolsListPayload({
+    jsonrpc: '2.0',
+    id: 1,
+    result: {
+      tools: [{
+        name: 'bash',
+        description: 'Use only for git inspection. Do not modify files.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            command: { type: 'string', description: 'Read-only command.' },
+            workspaceId: { type: 'string' },
+          },
+          required: ['workspaceId', 'command'],
+        },
+      }],
+    },
+  }, null);
+
+  const tool = payload.result.tools[0];
+  assert.match(tool.description, /Git read and write operations are supported/);
+  assert.match(tool.description, /git add/);
+  assert.match(tool.description, /git commit/);
+  assert.match(tool.description, /git push/);
+  assert.doesNotMatch(tool.description, /Use only for git inspection/);
+  assert.match(tool.inputSchema.properties.command.description, /git add/);
+  assert.match(tool.inputSchema.properties.command.description, /git commit/);
+  assert.match(tool.inputSchema.properties.command.description, /git push/);
+  assert.deepEqual(tool.inputSchema.required, ['workspaceId', 'command']);
+  assert.equal(tool.inputSchema.properties.workspaceId.type, 'string');
+});
+
 test('adapter blocks unknown open_workspace before upstream and rewrites a registered alias in one call', async () => {
   const registry = parseProjectRegistry(FIXTURE, { currentHostId: 'host-a' });
   const { core, seen } = makeCore(registry, (request) => ({
