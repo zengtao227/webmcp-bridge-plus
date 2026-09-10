@@ -118,7 +118,15 @@ Depending on task complexity and observed quality, execution may be performed by
 
 Use the executor that is most effective for the task. Simple mechanical work may be delegated; complex, architecture-heavy, security-sensitive, or poorly executed work may be handled directly through DevSpace.
 
-Regardless of executor, the same scope, validation, safety, and review requirements apply.
+Regardless of executor, the same scope, validation, safety, and review requirements apply. Git publication authority is role-based rather than model-based.
+
+### Rule 9 — Separate development execution from final release approval
+
+The Web/DevSpace development executor acts as the change author and must not directly publish its own work to `main`. It may leave a reviewable working tree or, when explicitly requested, publish a `chatgpt/<task>` review branch.
+
+A separately invoked independent release reviewer may publish an approved final tree directly to `origin/main` only when the user explicitly authorized release-on-PASS, the reviewer independently inspects the complete final change set, all required validation passes, and no unresolved issue remains. Small reviewer-found fixes require a fresh final review and complete validation; substantive redesign returns to development rather than being self-approved by the reviewer.
+
+This separation is the lightweight equivalent of author + PR reviewer/approver. See [`release-review-policy.md`](./release-review-policy.md) for the canonical release rules.
 
 ## 3. Preferred execution shape
 

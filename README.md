@@ -40,6 +40,7 @@ For the current private DevSpace design and day-to-day operation, see:
 - [`docs/troubleshooting.md`](./docs/troubleshooting.md) — known pitfalls, failure modes, and investigation order;
 - [`docs/development-roadmap.md`](./docs/development-roadmap.md) — central roadmap, execution-host direction, and DevSpace Developer Efficiency operating standard.
 - [`docs/developer-efficiency-benchmark.md`](./docs/developer-efficiency-benchmark.md) — real-task benchmark method and measured DevSpace round-trip results.
+- [`docs/release-review-policy.md`](./docs/release-review-policy.md) — two-agent author/reviewer release boundary and direct-`main` approval rules.
 
 ## Security model
 

@@ -217,10 +217,12 @@ repositories outside the approved scope.
 
 - use a dedicated, revocable credential scoped only to `webmcp-bridge`;
 - never expose the owner's normal SSH key, GitHub CLI token, or credential store;
-- protect `main` and require the repository CI gate before merge;
+- keep the DevSpace development identity unable to publish directly to `main`;
+- require the repository CI gate for review-branch/PR validation and run the same gate on `main` pushes;
 - permit the DevSpace identity to publish review branches such as `chatgpt/*`,
   but not to force-push, delete refs/tags, administer the repository, write
   workflows/secrets, or bypass branch protection;
+- treat an independently invoked release reviewer and its publication identity as a separate trust role governed by `docs/release-review-policy.md`; it must not obtain or reuse the DevSpace publication credential;
 - advertise Git writes as supported without making commit/push automatic.
 
 **Residual risk:** Any process in the DevSpace container can use or copy the

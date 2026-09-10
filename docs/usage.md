@@ -140,11 +140,11 @@ Step 1 只读确认问题
 Step 2 给最小修改方案
 Step 3 人工/reviewer 审批
 Step 4 只实施批准范围
-Step 5 跑测试
-Step 6 reviewer 再审 diff
-Step 7 commit
-Step 8 reviewer 再审 commit
-Step 9 push
+Step 5 跑测试并 review 最终 working tree
+Step 6 交给独立 release reviewer
+Step 7 reviewer 独立审完整 diff / security / tests
+Step 8 如有小范围 review fix，修复后重新完整验证
+Step 9 reviewer PASS 后按授权 commit 并发布；有 blocker 则停止
 ```
 
 这是当前项目最推荐的高风险修改流程。
@@ -163,31 +163,56 @@ Step 9 push
 `git push`。这是一项可用能力，不是自动授权：只有用户在当前任务中明确要求
 commit / push 时才执行。
 
-本仓库的发布边界是：
+本仓库采用轻量 two-agent release model，详细规则见
+[`release-review-policy.md`](./release-review-policy.md)。角色分离如下：
 
 ```text
-修改
+Web/DevSpace development executor
   ↓
-测试
+修改 + semantic review + 第一轮完整验证
   ↓
-review working tree
+保持 reviewable working tree
+或（用户明确要求时）push chatgpt/<task> review branch
   ↓
-commit 到 chatgpt/<task> branch
+independent release reviewer（例如独立运行的 Claude / Codex）
   ↓
-push 该 branch
+独立检查最终 diff + security + tests
   ↓
-main 的 PR / CI gate
+PASS 且用户已授权发布
+  ↓
+reviewer commit approved final tree + push origin/main
 ```
 
-不得直接 push `main`，不得 force-push、删除远端 ref/tag、改写历史、修改 Git
-credential/remote 或自行 merge。adapter、认证、Secret Firewall、Tunnel、Docker
-隔离等安全敏感代码仍需要独立 review。
+对于 **Web/DevSpace development executor**：不得直接 push `main`，不得自行 merge
+自己的 review branch。若用户明确要求它 commit / push，则仍只发布
+`chatgpt/<task>` review branch。
 
-推荐请求：
+对于 **独立 release reviewer**：如果它不是本次 Web/DevSpace 开发执行者，并且用户在本次
+review 中明确授权“验证通过后发布”，则在完成独立 semantic/security review、完整 validation、
+确认无 unresolved issue 后，可直接 commit 并 push `origin/main`；不要求为了形式再创建一层
+review branch 或 PR。已有 repository protection 不得绕过。PASS 后应把本次流程作为 terminal
+release step 完成；如果 reviewer 环境客观上没有 main 发布能力，应立即报告 capability blocker，
+不要再把任务无意义地踢回 DevSpace 形成 agent ping-pong。
+
+reviewer 如果只发现小范围、直接由审查产生的问题，可以修复后重新执行完整 final review；
+如果修复已经变成 substantive redesign 或明显扩大 scope，则必须停止发布并退回 development。
+
+任何角色都不得 force-push、删除远端 ref/tag、改写历史、修改 Git credential/remote、绕过
+repository protections，或提交 secrets/runtime state/unrelated files。adapter、认证、Secret
+Firewall、Tunnel、Docker 隔离等安全敏感代码仍需要独立 review。
+
+推荐的 DevSpace 开发请求：
 
 ```text
-完成修改和 npm run check；检查最终 diff 后提交到 chatgpt/<简短任务名>，
-并 push 这个功能分支。不要直接 push main，不要 force-push。
+完成修改和 npm run check；检查最终 diff。不要直接 push main。
+如我明确要求发布 review branch，再提交到 chatgpt/<简短任务名> 并 push。
+```
+
+推荐的独立最终审查请求：
+
+```text
+独立审查最终 change set。质量、正确性和安全优先于速度；完整 validation PASS 且无 blocker 后，
+无需再次确认，直接 commit approved final tree 并 push origin/main。若 FAIL 则停止发布并报告。
 ```
 
 ## 5. 常用只读命令请求
