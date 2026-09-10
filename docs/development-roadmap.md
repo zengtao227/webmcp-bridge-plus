@@ -333,7 +333,7 @@ Conclusion: V2.2 Phase 1.1 Skill-only routing is retained as the UX lesson/super
 
 ### B. DevSpace container auto-recovery
 
-Status: Repository-side implementation complete; host-side `dsup.sh --ensure` change and live activation remain pending independent review.
+Status: Repository-side implementation complete. Host-side `dsup.sh --ensure` change independently reviewed, deployed, and verified live on the reference macOS host, including a real machine-reboot recovery test on 2026-09-10 (LaunchAgent auto-rebuilt the DevSpace container after login with no manual intervention; new container ID differed from the pre-reboot one, confirming recreation rather than reuse). The separate stale-OAuth-after-container-replacement bug (adapter caching a dynamic client registration/token from a container that no longer exists) was root-caused and fixed in `#resetOAuthState()` (PR #4, merged, `main` at `249915ce159bedf235a12b350d0ceecf61027aff`); see `docs/troubleshooting.md` §19.
 
 Goal: an unattended macOS execution host should recover DevSpace after login/reboot and after a transient local container-runtime outage without weakening the current security model.
 
@@ -348,7 +348,7 @@ Repository-side design:
 
 The host-side `--ensure` implementation must continue to enforce the existing local Docker context, loopback-only binding, approved project mount, exact read-only credential overlays, image policy, `publicBaseUrl` normalization, and secret/mount checks. The repository-side installer does not duplicate those rules or add a separate public-endpoint detector.
 
-This status does **not** mean the host-side script has been changed or that a real LaunchAgent has been installed or activated.
+Both the LaunchAgent and the host-side `dsup.sh --ensure` contract are now installed and activated on the reference macOS host; see the verification note above.
 
 ### C. Developer Efficiency Phase 1
 

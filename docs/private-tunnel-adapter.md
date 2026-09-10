@@ -95,7 +95,7 @@ tunnel-client secrets 目录。卸载只移除本机 runtime，不会删除远�
 因此它的核心边界是 Docker 只挂载批准代码根、凭据文件覆盖，
 以及所有返回字符串再经 Secret Firewall；不声称 shell 内嵌路径一定能在读取前被拦截。
 
-### 可选：DevSpace container Auto-Recovery（Phase B repository-side）
+### DevSpace container Auto-Recovery（Phase B，已 live activated）
 
 仓库提供一个独立的 macOS LaunchAgent installer：
 
@@ -116,8 +116,13 @@ job 使用 `RunAtLoad` + 周期性 `StartInterval`，不使用持续保活语义
 image、credential masking 和 `publicBaseUrl` 等安全策略仍全部归 host-side `dsup.sh` 所有，
 installer 不复制这些策略。
 
-当前仓库只完成 repository-side installer；本轮没有读取或修改真实 host-side `dsup.sh`，
-也没有安装真实 LaunchAgent。host-side `--ensure` contract 和 live activation 需要独立执行与审查。
+2026-09-10 已在参考 macOS host 上完成 host-side `--ensure` 独立安全审查、部署并通过真实
+machine reboot 验证：登录后 recovery LaunchAgent 自动用 `dsup.sh --ensure` 重建 DevSpace
+容器（重建后容器 ID 与 reboot 前不同，证明是重建而非复用同一容器），镜像/loopback-only
+网络/挂载与凭据遮蔽契约逐项核对一致，全程无人工介入（不含 Docker Desktop 应用本身的
+登录自启动，那是 macOS/Docker 侧设置）。这解决的是容器生命周期自愈；adapter 侧
+"容器被替换后 stale OAuth client/token" 的独立修复见
+[`docs/troubleshooting.md`](./troubleshooting.md) 第 19 条。
 
 > 如果你手动给 DevSpace 设了 `DEVSPACE_PUBLIC_BASE_URL`，就要同时给适配器设
 > `DEVSPACE_OAUTH_RESOURCE=<那个 URL>/mcp`。默认不设才是对的。

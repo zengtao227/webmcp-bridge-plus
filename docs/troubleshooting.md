@@ -253,8 +253,11 @@ container lifecycle recovery 的行为边界是：launchd 周期性直接执行 
 不做破坏性操作，等待下一周期；如果已有容器的配置不满足安全条件，`--ensure` 必须
 fail closed，不删除、不替换、不尝试绕过原 `dsup.sh` 的安全创建路径。
 
-当前仓库没有读取或修改真实 host-side `dsup.sh`，因此上述 `--ensure` 行为仍属于
-host-side change contract，不能当作已经 live activated。
+Container lifecycle recovery（重启/容器被替换后的自愈）本身已经 live activated 并在
+2026-09-10 通过真实 machine reboot 验证：recovery LaunchAgent 在登录后自动用
+`dsup.sh --ensure` 重建容器（新容器 ID 与 reboot 前不同，证明是重建而非复用），
+镜像/网络/挂载安全约束逐项核对一致，全程无人工介入。但这只解决容器本身的自愈，
+不等于本节说的 stale MCP session 问题——那个仍是下面"后续正确做法"里描述的未实现项。
 
 ### 当前恢复方式
 
@@ -431,7 +434,61 @@ tunnel-client doctor --profile devspace --explain
 
 不要一看到连接失败就先改 production code。
 
-## 19. 记录新坑的规则
+## 19. 坑：DevSpace container replacement 后 stale OAuth client/token
+
+### 现象
+
+DevSpace container 被 auto-recovery 重建（新容器 = 新的 server-side OAuth state）后，
+adapter 继续持有旧容器签发的 access token 和 dynamic client registration。请求先返回：
+
+```text
+TOKEN_REQUEST_FAILED
+```
+
+随后持续：
+
+```text
+AUTHORIZATION_FAILED
+```
+
+人工 `launchctl kickstart` adapter 后立即恢复——说明是 adapter 内存里的 stale OAuth state，
+不是 DevSpace 或网络问题。
+
+### 根因
+
+`adapter/src/oauth-client.js` 的 `#establish()` / `invalidate()` 原来只清 `#token`，
+没有同时清 `#client`（dynamic client registration）和 `#metadata`。容器换了之后
+server 端的 client 注册和 token 都已失效，但 adapter 仍拿着旧 `#client`/`#metadata`
+去发起 token 请求，必然失败。
+
+### 修复
+
+新增 `#resetOAuthState()`，`invalidate()` 和 `#establish()` 的 catch 分支都改为调用它，
+一次性清 `token`/`client`/`metadata` 三者，逼迫下一次请求重新走完整流程：
+
+```text
+discovery → dynamic client registration → authorization → token exchange
+```
+
+两个必须覆盖的路径都已加测试：refresh token failure；MCP 旧 access token 被新
+DevSpace 立即 401 拒绝。PR #4，merged squash，main `249915ce159bedf235a12b350d0ceecf61027aff`。
+
+### 如何快速确认
+
+在 adapter/tunnel 进程完全不重启的前提下（区别于"进程刚重启、还没有缓存 client"这种
+会误判为 PASS 的弱测试），停掉 devspace 容器逼 recovery 重建，再发一次请求，看
+`~/Library/Logs/webmcp-devspace-tunnel.err`：
+
+```text
+{"event":"token_invalidated"}
+{"event":"upstream_unauthorized_retry"}
+{"event":"token_issued"}
+```
+
+出现这个序列、adapter/tunnel PID 全程不变，才算真正验证了这个修复（2026-09-10 用这个方法
+验证过两次：容器换 ID 后 ~220ms 内自动完成，无人工 kickstart）。
+
+## 20. 记录新坑的规则
 
 以后每遇到一个真实问题，建议在这里追加四项：
 

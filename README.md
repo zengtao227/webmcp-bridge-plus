@@ -112,9 +112,7 @@ current profile, then installs `tunnel-client run` as a per-user LaunchAgent.
 stdio. See [`docs/private-tunnel-adapter.md`](./docs/private-tunnel-adapter.md).
 
 For Phase B container lifecycle recovery, the repository also provides a separate
-macOS LaunchAgent installer. After the host-side
-`~/Doc/devspace-container/dsup.sh` implements the reviewed `--ensure` contract,
-install or remove the periodic ensure job with:
+macOS LaunchAgent installer:
 
 ```bash
 bash ./adapter/deploy/install-devspace-recovery-launchd.sh
@@ -122,8 +120,12 @@ bash ./adapter/deploy/install-devspace-recovery-launchd.sh --uninstall
 ```
 
 The recovery LaunchAgent directly invokes the host-only `dsup.sh --ensure`; it
-does not execute repository code. Repository-side implementation does not imply
-that the host-side contract or live LaunchAgent activation has been completed.
+does not execute repository code. This is live on the reference macOS host and
+was verified end-to-end across a real machine reboot on 2026-09-10 (the
+recovery LaunchAgent rebuilt the DevSpace container automatically after login,
+with no manual intervention). See
+[`docs/troubleshooting.md`](./docs/troubleshooting.md) §19 for the related
+stale-OAuth-after-container-replacement fix and its verification evidence.
 
 ## Current milestone
 
