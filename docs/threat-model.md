@@ -25,29 +25,34 @@ Primary assets to protect include:
 
 ## Trust boundaries
 
+Current production Native path:
+
 ```text
-[DeepSeek Web page / model]
+[ChatGPT / Web AI model]
           |
-          | untrusted messages
+          | untrusted MCP requests
           v
-[WebMCP Bridge trusted policy core]
+[OpenAI Secure MCP Tunnel]
           |
-          | authenticated HTTPS MCP
           v
-[Remote MCP / DevSpace]
+[immutable Native host boundary]
           |
-          | sandboxed operations
+          | verified relay / lifecycle only
           v
-[Docker / approved project mount]
+[Native WebMCP container]
+          |
+          | five-tool execution
+          v
+[/workspace / owner-selected host root]
 ```
 
 A second critical boundary exists on the return path:
 
 ```text
-raw MCP result -> Secret Firewall -> sanitized model context
+raw Native MCP result / diagnostic -> host Secret Firewall -> sanitized model context
 ```
 
-No adapter or transport may bypass that boundary.
+No provider adapter or transport may bypass that boundary. The DeepSeek/Chrome-extension subsystem is separate and retains its own browser-origin trust boundary.
 
 ## Threats and mitigations
 
@@ -58,7 +63,7 @@ No adapter or transport may bypass that boundary.
 **Mitigations:**
 
 - deterministic path policy before file reads whenever a path is available;
-- sandbox exposes only approved project mounts;
+- the Native sandbox exposes only the owner-selected `/workspace` mount plus explicitly reviewed protected/optional mounts;
 - known secret filenames/directories denied by default;
 - deny decision is returned instead of file contents.
 
@@ -136,14 +141,15 @@ No adapter or transport may bypass that boundary.
 
 ### T8 — Direct host compromise through bridge design
 
-**Scenario:** The extension gains arbitrary host shell/filesystem access or connects to an MCP backend that exposes the entire host.
+**Scenario:** The model or optional browser-provider subsystem gains a path to unrestricted host shell/filesystem access, or the Native runtime is created with a broader host boundary than the owner authorized.
 
 **Mitigations:**
 
-- no Native Messaging or direct macOS filesystem API in MVP;
-- coding operations come from remote MCP;
-- DevSpace should run inside Docker with only approved project mounts;
-- do not mount home, `/`, Docker socket, `.ssh`, `.aws`, or secret stores;
+- no Native Messaging or direct host-user shell in the base product;
+- coding operations execute only inside the verified Native container;
+- the model-visible root is fixed at `/workspace` and backed only by the owner-selected host root;
+- macOS `/` and the Docker socket are not accepted as normal workspace exposure;
+- protected WebMCP/tunnel control-plane paths are carved out even when they fall beneath a broad selected root;
 - do not blindly inherit host environment variables.
 
 ### T9 — Tool result bypass
@@ -192,50 +198,86 @@ No adapter or transport may bypass that boundary.
 
 ### T13 — Container-to-host execution through writable runtime code
 
-**Scenario:** DevSpace can modify a repository mounted read/write, while a host
-LaunchAgent or tunnel runtime later executes adapter code directly from that same
-tree (or through a symlink into it). Repository write access would then become a
-path to execute code as the host user.
+**Scenario:** Native WebMCP can modify files in the owner-selected writable workspace, while a host LaunchAgent, tunnel runtime, or container controller later executes code directly from that same tree (or through a symlink into it). Workspace write access would then become a path to execute code as the host user.
 
 **Mitigations:**
 
-- no unattended host process executes code from the DevSpace-writable project tree;
-- Tunnel adapter runtime is deployed to a host-only directory outside the project mount;
-- deployment accepts only a clean, exact Git-tracked runtime payload;
-- releases contain regular copied files only, never repository symlinks;
-- each release has an exact manifest and aggregate payload digest;
-- `current` switches only after release verification and is updated atomically;
-- `config/devspace-projects.yaml` is canonical in Git but runtime reads the deployed copy.
+- no unattended host process executes code from the model-writable workspace tree;
+- production host runtime/controller code is deployed as immutable source-gated material outside the workspace;
+- deployment accepts only reviewed source identity and verifies exact manifests/digests;
+- host execution does not follow repository/workspace symlinks into mutable code;
+- image/source/policy identity is verified before any `docker exec`;
+- protected runtime/tunnel/configuration paths remain outside or masked from the workspace.
 
-### T14 — DevSpace Git publication credential abuse
+### T14 — Native Git publication credential abuse
 
-**Scenario:** A model, malicious repository instruction, or compromised process
-uses the DevSpace Git credential to publish unintended commits or to attack
-repositories outside the approved scope.
+**Scenario:** A model, malicious repository instruction, or compromised process uses the separately authorized Native Git credential to publish unintended commits or to attack repositories outside the approved scope.
 
 **Mitigations:**
 
-- use a dedicated, revocable credential scoped only to `webmcp-bridge`;
+- keep Git publication disabled by default;
+- use a dedicated, revocable credential scoped only to `webmcp-bridge` when publication is explicitly enabled;
 - never expose the owner's normal SSH key, GitHub CLI token, or credential store;
-- keep the DevSpace development identity unable to publish directly to `main`;
+- keep the WebMCP development identity unable to publish directly to `main`;
 - require the repository CI gate for review-branch/PR validation and run the same gate on `main` pushes;
-- permit the DevSpace identity to publish review branches such as `chatgpt/*`,
-  but not to force-push, delete refs/tags, administer the repository, write
-  workflows/secrets, or bypass branch protection;
-- treat an independently invoked release reviewer and its publication identity as a separate trust role governed by `docs/release-review-policy.md`; it must not obtain or reuse the DevSpace publication credential;
+- permit the development identity to publish review branches such as `chatgpt/*`, but not to force-push, delete refs/tags, administer the repository, write workflows/secrets, or bypass branch protection;
+- treat an independently invoked release reviewer and its publication identity as a separate trust role governed by `docs/release-review-policy.md`; it must not obtain or reuse the development publication credential;
 - advertise Git writes as supported without making commit/push automatic.
 
-**Residual risk:** Any process in the DevSpace container can use or copy the
-repository-scoped credential. Treat it as potentially compromised and revoke it
-if unexpected branches or authentication activity appear.
+**Residual risk:** Any process in the Native container can use or copy an enabled repository-scoped credential. Treat it as potentially compromised and revoke it if unexpected branches or authentication activity appear.
 
-## Out of scope for MVP
+### T15 — Native container/control-plane substitution
 
-The MVP intentionally does not attempt to secure capabilities it does not provide:
+**Scenario:** The tunnel launches the Native host relay while a same-named container was created with weaker mounts, networking, capabilities, user identity, or a different image/source payload. A bare `docker exec webmcp-native ...` would silently cross the intended trust boundary.
+
+**Mitigations:**
+
+- Native host startup runs the source-gated container controller before any `docker exec`;
+- image pin binds immutable image ID to the reviewed Native runtime-group digest (`dist/native/manifest.json` → `groupSha256.runtime`);
+- controller checks the image source label before inspecting/using the container;
+- container policy digest and image identity are recorded as labels;
+- controller independently checks non-root UID/GID, `CapDrop=ALL`, `no-new-privileges`, network mode, workspace mount and optional Git secret mounts;
+- policy drift fails closed; the host boundary never silently replaces or executes into a mismatched container;
+- host controller/policy/config parser dependencies are themselves part of the immutable host-runtime source gate.
+
+### T16 — Writable workspace becomes future host code
+
+**Scenario:** `bash`, `write`, or `edit` changes files in a host-mounted writable workspace that the owner later executes on the host. In a project this can include Git hooks, package scripts, build files, or source code. With a broad home/filesystem mount it can include shell startup files or other host persistence locations.
+
+**Mitigations / trust statement:**
+
+- treat every writable workspace with arbitrary `bash` as **host-code authorship**, not as a guarantee that model effects end at the container boundary;
+- use narrow Project mode by default when broad filesystem access is unnecessary;
+- Advanced broad-filesystem mode is explicitly highest-trust and defaults to network off;
+- keep WebMCP's own launcher/config/runtime/tunnel trust plane carved out even in broad modes;
+- do not claim that network isolation, `CapDrop`, or Secret Firewall prevents later host execution of files the owner deliberately allowed the model to write;
+- do not attempt to enumerate/mask every possible host persistence vector; that would be incomplete and would create a false security claim.
+
+### T17 — Remote or stale temporary-elevation authority
+
+**Scenario:** The model attempts to mint/renew broader filesystem authority remotely, reuse a lease after reboot/expiry, forward new work after the absolute deadline, or keep an old elevated container reachable after the lease should have ended.
+
+**Mitigations:**
+
+- no MCP tool, remote endpoint, writable workspace file, or non-interactive approval flag can create or renew a lease;
+- the elevation lifecycle CLI must execute from the verified source-gated immutable host snapshot; grant attempts from a writable checkout are rejected;
+- grant starts from the immutable local CLI but authority is created only after the logged-in macOS GUI session approves a system `osascript` confirmation dialog; a remote SSH/pseudo-TTY cannot substitute for that local approval, and lifetime is capped at one hour;
+- lease state is mode-`0600` in the protected host control plane and is bound to a random lease ID plus both the current macOS boot identity and GUI login/audit-session identity;
+- malformed, stale, expired, reboot-mismatched, login-session-mismatched, or normal-root-mismatched lease state grants no authority;
+- authorization is fixed-duration with a default and maximum of one hour, with no automatic or remote renewal; before forwarding new elevated input, the immutable host relay checks the same absolute deadline as the lease/expiry timer and triggers the existing revocation path once expired;
+- an elevated container is separately lease-labelled, runs with network off and without Git publication secret mounts, and retains the normal hardening/control-plane masks;
+- expiry/revocation closes the active executor before removing the elevated container and restoring normal `/workspace` policy;
+- if an old elevated container cannot be identified safely, cleanup fails closed instead of deleting/reusing ambiguous state; if normal restoration fails, the tunnel/service remains stopped.
+
+**Residual risk:** During an intentionally active lease, the model can modify any non-carved-out file beneath the owner-selected elevated root, including files the owner may later execute. v1.1 also does not bind an active lease to one browser session; local-only grant prevents remote renewal, not use of an already-active tunnel session.
+
+## Out of scope for the base product
+
+The base Native product intentionally does not attempt to secure capabilities it does not provide:
 
 - Native Messaging;
-- native shell;
-- direct host filesystem access;
+- direct host-user shell;
+- unrestricted host filesystem access outside the owner-selected `/workspace` root;
 - Chrome debugger control;
 - general browser automation;
 - Google Drive / OneDrive;

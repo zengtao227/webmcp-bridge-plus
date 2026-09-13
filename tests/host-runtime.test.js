@@ -51,6 +51,7 @@ async function createCleanRepository(root) {
     'adapter/deploy/install-launchd.sh',
     'adapter/src/core.js',
     'adapter/src/project-registry.js',
+    'config/devspace-projects.yaml',
   ];
   await execFileAsync('git', ['clone', '--quiet', '--no-hardlinks', REPO_ROOT, sourceRoot], {
     encoding: 'utf8',

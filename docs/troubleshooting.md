@@ -1,6 +1,8 @@
 # DevSpace / Secure MCP Tunnel 排障与踩坑记录
 
-这份文档记录已经踩过的坑、已知限制和建议排查顺序。目标是以后出现类似问题时，先从已知故障模式排查，避免重复走弯路。
+Status: Historical DevSpace migration troubleshooting. Native WebMCP is the current production runtime; DevSpace recovery/OAuth/runtime checks in this document are retained only for migration history and legacy-code investigation, not for current production operations.
+
+这份文档记录迁移期间已经踩过的坑、已知限制和当时的排查顺序。目标是保留可复用的故障证据，避免把退役 DevSpace 路径误认为当前 Native production 操作手册。
 
 ## 1. 先确认正常基线
 
@@ -253,7 +255,7 @@ container lifecycle recovery 的行为边界是：launchd 周期性直接执行 
 不做破坏性操作，等待下一周期；如果已有容器的配置不满足安全条件，`--ensure` 必须
 fail closed，不删除、不替换、不尝试绕过原 `dsup.sh` 的安全创建路径。
 
-Container lifecycle recovery（重启/容器被替换后的自愈）本身已经 live activated 并在
+Container lifecycle recovery（重启/容器被替换后的自愈）在迁移期曾 live activated，并在
 2026-09-10 通过真实 machine reboot 验证：recovery LaunchAgent 在登录后自动用
 `dsup.sh --ensure` 重建容器（新容器 ID 与 reboot 前不同，证明是重建而非复用），
 镜像/网络/挂载安全约束逐项核对一致，全程无人工介入。但这只解决容器本身的自愈，
@@ -375,9 +377,9 @@ My code
 
 遇到“AI 是否可能看到某个本机文件”的问题时，第一步不是只看 Secret Firewall，而是先看那个文件有没有被 Docker mount 进去。
 
-## 18. 建议排查顺序
+## 18. 历史 DevSpace 排查顺序（已退役）
 
-如果 `@DevSpace` 突然不可用，按下面顺序查，避免无目的改代码：
+下面步骤只适用于复盘或维护退役 DevSpace 迁移实现。当前 Native WebMCP production 故障不得按这套 DevSpace runtime/OAuth 流程操作。
 
 ### A. Tunnel 是否在线
 

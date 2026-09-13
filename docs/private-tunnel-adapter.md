@@ -1,12 +1,14 @@
 # 私有 MCP 适配器（DevSpace over OpenAI Secure MCP Tunnel）
 
+Status: Historical/retired DevSpace migration implementation. Native WebMCP is the current production runtime. The deployment and recovery commands below are preserved for historical evidence and legacy-code maintenance only; do not use them as current production instructions.
+
 ## 要解决的问题
 
-当前设计不发布普通公网 DevSpace 入口。DevSpace 保持 loopback-only，由 Mac 主动建立
+该已退役设计不发布普通公网 DevSpace 入口。DevSpace 保持 loopback-only，由 Mac 主动建立
 OpenAI Secure MCP Tunnel outbound connection；失败时系统应降级为不可用，而不是公网可达。
 
 旧公网方案、事故背景和退役决策集中记录在
-[`adr/0001-devspace-private-tunnel.md`](./adr/0001-devspace-private-tunnel.md)，现行运行文档不再重复维护旧方案细节。
+[`adr/0001-devspace-private-tunnel.md`](./adr/0001-devspace-private-tunnel.md)。本文件保留当时私有 Tunnel 实现细节，不代表当前 Native production 运行方式。
 
 ## 链路
 
@@ -18,7 +20,7 @@ ChatGPT
   → DevSpace 容器 127.0.0.1:7676（仅 loopback，容器网络内）
 ```
 
-没有任何 DevSpace 公网入站端口；当前运行路径只有 loopback-only DevSpace 和主动外连的 Secure MCP Tunnel。
+没有任何 DevSpace 公网入站端口；当时运行路径只有 loopback-only DevSpace 和主动外连的 Secure MCP Tunnel。
 
 ## 为什么需要适配器
 
@@ -52,7 +54,7 @@ DevSpace 的 `publicBaseUrl` 可能残留为旧公网域名（例如
 | 不信任任何请求头 | 不读 `Host` / `X-Forwarded-For` / `X-Real-IP` / 自报的设备标识 |
 | 不发布 OAuth 元数据 | 隧道侧不会触发浏览器授权，也不暴露端点 |
 | 工具 allowlist | 只转发当前已审查的 `open_workspace/read/write/edit/bash`；DevSpace 新增工具默认拒绝 |
-| project registry enforcement | `open_workspace` 必须先通过 `config/devspace-projects.yaml` 解析；unknown / unregistered path / wrong backend 在到达 DevSpace 前拒绝，`tools/list` 只广告当前 execution host 的 registered references |
+| workspace-root enforcement | `config/devspace-projects.yaml` 只登记 execution host 及其 approvedRoot；`open_workspace` 只接受当前 host 的唯一 approvedRoot，其他路径在到达 DevSpace 前拒绝，`tools/list` 只广告这个 root |
 | 凭据只有引用 | `env:` / `file:` / `keychain:`，配置里永远没有明文 |
 | 日志脱敏 | bearer、JWT、命名字段、已注册的原文（≥8 字符）全部替换 |
 | 失败即关闭 | owner 密码错、JSON 畸形、body 超限、元数据异常一律拒绝，不降级放行 |
@@ -61,7 +63,7 @@ DevSpace 的 `publicBaseUrl` 可能残留为旧公网域名（例如
 可以伪造。stdio 把可调用者收窄为持有 tunnel runtime 凭据并启动该子进程的
 tunnel-client，同时完全移除了可供其他本机进程连接的适配器地址。
 
-## 怎么用
+## 历史部署方式（不要用于当前 production）
 
 ### 1. 装常驻（一次）
 
@@ -95,7 +97,7 @@ tunnel-client secrets 目录。卸载只移除本机 runtime，不会删除远�
 因此它的核心边界是 Docker 只挂载批准代码根、凭据文件覆盖，
 以及所有返回字符串再经 Secret Firewall；不声称 shell 内嵌路径一定能在读取前被拦截。
 
-### DevSpace container Auto-Recovery（Phase B，已 live activated）
+### DevSpace container Auto-Recovery（Phase B，迁移期曾 live activated）
 
 仓库提供一个独立的 macOS LaunchAgent installer：
 

@@ -4,7 +4,7 @@
 - 计划开发时间：TBD，仅在真实 multi-host / 外部用户需求出现后启动
 - 前置版本：稳定版 `webmcp-bridge`（single execution host）
 
-> 2026-09-10 决策：当前 `webmcp-bridge` 不继续产品化 multi-host。本文保留为未来独立项目 `webmcp-bridge-plus` 的设计输入；当前优先完成 Developer Efficiency 的量化优化与稳定化。
+> 2026-09-10 决策：当前 `webmcp-bridge` 不继续产品化 multi-host。本文保留为未来独立项目 `webmcp-bridge-plus` 的历史设计输入；其中 DevSpace routing/runtime 方案已被 Native production 架构取代，未来若重启 Plus 设计必须以 Native WebMCP 为基线，而不是恢复本文的 DevSpace execution path。
 
 ## 目标
 

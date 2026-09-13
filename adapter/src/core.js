@@ -355,9 +355,9 @@ export function createAdapterCore(config, {
     }
 
     // open_workspace is a routing boundary as well as a filesystem operation.
-    // Resolve it through the canonical registry before DevSpace can see any
-    // user/model-supplied path. Every other tool keeps the existing Secret
-    // Firewall behavior unchanged.
+    // Only the current host's approved workspace root may reach DevSpace.
+    // Projects are addressed beneath that workspace after it is opened.
+    // Every other tool keeps the existing Secret Firewall behavior unchanged.
     let effectivePayload = payload;
     if (payload?.method === 'tools/call' && payload?.params?.name === 'open_workspace') {
       const routed = routeOpenWorkspaceCall(payload, projectRegistry);
@@ -370,7 +370,7 @@ export function createAdapterCore(config, {
         };
       }
       effectivePayload = routed.payload;
-      log('project_routed', { project: routed.projectId, host: projectRegistry?.currentHostId ?? null });
+      log('workspace_routed', { root: routed.workspaceRoot, host: projectRegistry?.currentHostId ?? null });
     }
 
     // Deny before DevSpace ever sees the resolved path: the secret is never read.

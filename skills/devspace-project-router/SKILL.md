@@ -3,7 +3,9 @@ name: devspace-project-router
 description: Resolve a human-friendly project name (or an exact registered absolute path) such as "webmcp-bridge", "WebMCP Bridge" or "/work/My code/webmcp-bridge" into the registered DevSpace host and approved path, then open it with the existing open_workspace tool. Use whenever the user invokes @DevSpace and refers to a project. Resolution is governed by a registry (config/devspace-projects.yaml is canonical; an embedded snapshot makes the Skill self-contained in ChatGPT): registered name/alias/exact path -> execute, ambiguous -> ask, unknown name / unregistered path / registry unavailable -> fail closed. open_workspace only ever receives an exact registered project.path.
 ---
 
-# DevSpace project router
+# DevSpace project router — historical design input
+
+> This Skill records the earlier DevSpace-era multi-host routing experiment. It is preserved for its fail-closed registry and ambiguity-handling ideas, but it is **not** the active Plus runtime design. New Plus routing must target independent Native WebMCP execution hosts.
 
 ## Purpose
 

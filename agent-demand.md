@@ -1,5 +1,7 @@
 # Agent Demand Gate: Private ChatGPT MCP access
 
+Status: Historical DevSpace migration decision record. Native WebMCP is the current production runtime; the DevSpace-specific solution below records the earlier private-tunnel decision and is not current operational guidance.
+
 ## 1. Friction Point
 - Historical friction: The retired public-ingress workflow depended on a manual shutdown step, creating a fail-open exposure risk.
 - Who experiences it: The repository owner using ChatGPT Web from one MacBook Pro.

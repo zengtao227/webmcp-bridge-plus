@@ -48,12 +48,8 @@ function newHost(id) {
   return { id, app: null, approvedRoot: null };
 }
 
-function newProject(id) {
-  return { id, host: null, path: null, aliases: [] };
-}
-
 function setField(target, field, value, lineNumber) {
-  if (!FIELD_PATTERN.test(field) || !Object.hasOwn(target, field) || field === 'id' || field === 'aliases') {
+  if (!FIELD_PATTERN.test(field) || !Object.hasOwn(target, field) || field === 'id') {
     fail(`Unsupported registry field '${field}' on line ${lineNumber}.`, 'INVALID_REGISTRY_FIELD');
   }
   if (target[field] !== null) {
@@ -70,32 +66,12 @@ function isCanonicalAbsolutePath(value) {
     && !value.includes('\0');
 }
 
-function isInsideRoot(root, target) {
-  const relative = path.posix.relative(root, target);
-  return relative === '' || (relative !== '..' && !relative.startsWith('../') && !path.posix.isAbsolute(relative));
-}
-
-export function normalizeProjectReference(value) {
-  if (typeof value !== 'string') {
-    return null;
-  }
-  const trimmed = value.trim();
-  if (trimmed.length === 0 || trimmed.length > MAX_REFERENCE_LENGTH) {
-    return null;
-  }
-  return trimmed
-    .toLowerCase()
-    .replace(/[\s_]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '');
-}
-
-function buildRegistry({ version, hosts, projects, currentHostId }) {
+function buildRegistry({ version, hosts, currentHostId }) {
   if (version !== 1) {
     fail('Registry version must be exactly 1.', 'UNSUPPORTED_REGISTRY_VERSION');
   }
-  if (hosts.size === 0 || projects.size === 0) {
-    fail('Registry must contain at least one host and one project.', 'EMPTY_REGISTRY');
+  if (hosts.size === 0) {
+    fail('Registry must contain at least one host.', 'EMPTY_REGISTRY');
   }
 
   for (const host of hosts.values()) {
@@ -104,38 +80,6 @@ function buildRegistry({ version, hosts, projects, currentHostId }) {
     }
     if (!isCanonicalAbsolutePath(host.approvedRoot)) {
       fail(`Host '${host.id}' has an invalid approvedRoot.`, 'INVALID_APPROVED_ROOT');
-    }
-  }
-
-  const pathIndex = new Map();
-  const nameIndex = new Map();
-  const addName = (name, project) => {
-    const normalized = normalizeProjectReference(name);
-    if (!normalized) {
-      fail(`Project '${project.id}' has an invalid name or alias.`, 'INVALID_PROJECT_ALIAS');
-    }
-    const existing = nameIndex.get(normalized) ?? [];
-    if (!existing.includes(project)) {
-      existing.push(project);
-    }
-    nameIndex.set(normalized, existing);
-  };
-
-  for (const project of projects.values()) {
-    const host = hosts.get(project.host);
-    if (!host) {
-      fail(`Project '${project.id}' references an unknown host.`, 'UNKNOWN_PROJECT_HOST');
-    }
-    if (!isCanonicalAbsolutePath(project.path) || !isInsideRoot(host.approvedRoot, project.path)) {
-      fail(`Project '${project.id}' has a path outside its approvedRoot.`, 'INVALID_PROJECT_PATH');
-    }
-    if (pathIndex.has(project.path)) {
-      fail(`Project path '${project.path}' is registered more than once.`, 'DUPLICATE_PROJECT_PATH');
-    }
-    pathIndex.set(project.path, project);
-    addName(project.id, project);
-    for (const alias of project.aliases) {
-      addName(alias, project);
     }
   }
 
@@ -150,57 +94,26 @@ function buildRegistry({ version, hosts, projects, currentHostId }) {
     fail('DEVSPACE_HOST_ID is required when the registry contains multiple hosts.', 'CURRENT_HOST_REQUIRED');
   }
 
-  const currentProjects = [...projects.values()].filter((project) => project.host === effectiveHostId);
-  if (currentProjects.length === 0) {
-    fail(`Current host '${effectiveHostId}' has no registered projects.`, 'CURRENT_HOST_HAS_NO_PROJECTS');
-  }
-
+  const currentHost = hosts.get(effectiveHostId);
   const registry = {
     version,
     currentHostId: effectiveHostId,
     hosts,
-    projects,
-    currentProjects: Object.freeze(currentProjects),
+    approvedRoot: currentHost.approvedRoot,
     resolve(reference) {
       if (typeof reference !== 'string') {
         return { status: 'invalid' };
       }
-      const trimmed = reference.trim();
-      if (trimmed.length === 0 || trimmed.length > MAX_REFERENCE_LENGTH) {
+      if (reference.length === 0 || reference.length > MAX_REFERENCE_LENGTH) {
         return { status: 'invalid' };
       }
-
-      let matches;
-      if (trimmed.startsWith('/')) {
-        const project = pathIndex.get(trimmed);
-        matches = project ? [project] : [];
-      } else {
-        const normalized = normalizeProjectReference(trimmed);
-        matches = normalized ? (nameIndex.get(normalized) ?? []) : [];
-      }
-
-      if (matches.length === 0) {
+      if (reference !== currentHost.approvedRoot) {
         return { status: 'missing' };
       }
-      if (matches.length > 1) {
-        return {
-          status: 'ambiguous',
-          candidates: Object.freeze(matches.map((project) => ({ id: project.id, host: project.host }))),
-        };
-      }
-
-      const [project] = matches;
-      if (project.host !== effectiveHostId) {
-        return { status: 'backend_unavailable', project };
-      }
-      return { status: 'unique', project };
+      return { status: 'unique', workspace: currentHost };
     },
     advertisedReferences() {
-      const values = [];
-      for (const project of currentProjects) {
-        values.push(project.id, ...project.aliases, project.path);
-      }
-      return Object.freeze([...new Set(values)]);
+      return Object.freeze([currentHost.approvedRoot]);
     },
   };
 
@@ -215,9 +128,7 @@ export function parseProjectRegistry(text, { currentHostId = null } = {}) {
   let version = null;
   let section = null;
   let current = null;
-  let aliasesProject = null;
   const hosts = new Map();
-  const projects = new Map();
   const lines = text.split(/\r?\n/);
 
   for (let index = 0; index < lines.length; index += 1) {
@@ -237,7 +148,6 @@ export function parseProjectRegistry(text, { currentHostId = null } = {}) {
 
     if (indent === 0) {
       current = null;
-      aliasesProject = null;
       const versionMatch = /^version:\s*(\d+)$/.exec(trimmed);
       if (versionMatch) {
         if (version !== null) {
@@ -246,26 +156,24 @@ export function parseProjectRegistry(text, { currentHostId = null } = {}) {
         version = Number(versionMatch[1]);
         continue;
       }
-      if (trimmed === 'hosts:' || trimmed === 'projects:') {
-        section = trimmed.slice(0, -1);
+      if (trimmed === 'hosts:') {
+        section = 'hosts';
         continue;
       }
       fail(`Unsupported top-level registry entry on line ${lineNumber}.`, 'INVALID_REGISTRY_SYNTAX');
     }
 
     if (indent === 2) {
-      aliasesProject = null;
       const idMatch = /^([a-z0-9][a-z0-9-]{0,127}):$/.exec(trimmed);
-      if (!section || !idMatch) {
+      if (section !== 'hosts' || !idMatch) {
         fail(`Invalid registry entry on line ${lineNumber}.`, 'INVALID_REGISTRY_SYNTAX');
       }
       const id = idMatch[1];
-      const targetMap = section === 'hosts' ? hosts : projects;
-      if (targetMap.has(id)) {
+      if (hosts.has(id)) {
         fail(`Duplicate registry id '${id}'.`, 'DUPLICATE_REGISTRY_ID');
       }
-      current = section === 'hosts' ? newHost(id) : newProject(id);
-      targetMap.set(id, current);
+      current = newHost(id);
+      hosts.set(id, current);
       continue;
     }
 
@@ -273,29 +181,11 @@ export function parseProjectRegistry(text, { currentHostId = null } = {}) {
       if (!current) {
         fail(`Registry field without an entry on line ${lineNumber}.`, 'INVALID_REGISTRY_SYNTAX');
       }
-      if (section === 'projects' && trimmed === 'aliases:') {
-        aliasesProject = current;
-        continue;
-      }
-      aliasesProject = null;
       const fieldMatch = /^([A-Za-z][A-Za-z0-9]*):\s*(.+)$/.exec(trimmed);
       if (!fieldMatch) {
         fail(`Invalid registry field on line ${lineNumber}.`, 'INVALID_REGISTRY_SYNTAX');
       }
       setField(current, fieldMatch[1], parseScalar(fieldMatch[2], lineNumber), lineNumber);
-      continue;
-    }
-
-    if (indent === 6 && section === 'projects' && aliasesProject) {
-      const aliasMatch = /^-\s+(.+)$/.exec(trimmed);
-      if (!aliasMatch) {
-        fail(`Invalid alias on line ${lineNumber}.`, 'INVALID_REGISTRY_SYNTAX');
-      }
-      const alias = parseScalar(aliasMatch[1], lineNumber);
-      if (alias.length === 0 || alias.length > MAX_REFERENCE_LENGTH) {
-        fail(`Alias on line ${lineNumber} is invalid.`, 'INVALID_PROJECT_ALIAS');
-      }
-      aliasesProject.aliases.push(alias);
       continue;
     }
 
@@ -305,7 +195,7 @@ export function parseProjectRegistry(text, { currentHostId = null } = {}) {
   if (version === null) {
     fail('Registry version is required.', 'INVALID_REGISTRY_SYNTAX');
   }
-  return buildRegistry({ version, hosts, projects, currentHostId });
+  return buildRegistry({ version, hosts, currentHostId });
 }
 
 export async function loadProjectRegistry(filePath, options = {}) {
@@ -331,7 +221,7 @@ export async function loadProjectRegistry(filePath, options = {}) {
 
 export function routeOpenWorkspaceCall(payload, registry) {
   if (payload?.method !== 'tools/call' || payload?.params?.name !== 'open_workspace') {
-    return { allowed: true, payload, projectId: null };
+    return { allowed: true, payload, workspaceRoot: null };
   }
   if (!registry) {
     return { allowed: false, reason: 'project_registry_unavailable' };
@@ -340,24 +230,22 @@ export function routeOpenWorkspaceCall(payload, registry) {
   const result = registry.resolve(reference);
   if (result.status !== 'unique') {
     const reason = {
-      invalid: 'project_reference_invalid',
-      missing: 'project_unregistered',
-      ambiguous: 'project_ambiguous',
-      backend_unavailable: 'project_backend_not_selectable',
-    }[result.status] ?? 'project_routing_failed';
+      invalid: 'workspace_reference_invalid',
+      missing: 'workspace_root_not_allowed',
+    }[result.status] ?? 'workspace_routing_failed';
     return { allowed: false, reason };
   }
 
   return {
     allowed: true,
-    projectId: result.project.id,
+    workspaceRoot: registry.approvedRoot,
     payload: {
       ...payload,
       params: {
         ...payload.params,
         arguments: {
           ...payload.params.arguments,
-          path: result.project.path,
+          path: registry.approvedRoot,
         },
       },
     },
@@ -417,7 +305,7 @@ export function rewriteToolsListPayload(payload, registry) {
     changed = true;
     return {
       ...tool,
-      description: 'Open one registered project on this DevSpace execution host. Pass a canonical project name, registered alias, or exact registered project path. Never construct or guess a filesystem path.',
+      description: 'Open the single approved workspace root on this DevSpace execution host. Project directories are accessed beneath that workspace; arbitrary filesystem paths are not allowed.',
       inputSchema: {
         ...schema,
         properties: {
@@ -426,7 +314,7 @@ export function rewriteToolsListPayload(payload, registry) {
             ...pathSchema,
             type: 'string',
             enum: references,
-            description: 'Registered project reference only. Use one of the enumerated canonical names, aliases, or exact registered paths; do not synthesize /work paths.',
+            description: 'Approved workspace root only. Use the single enumerated root; access projects beneath it after the workspace is open.',
           },
         },
       },

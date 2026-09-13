@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 const workflowUrl = new URL('../.github/workflows/repository-check.yml', import.meta.url);
 const instructionsUrl = new URL('../AGENTS.md', import.meta.url);
 const releasePolicyUrl = new URL('../docs/release-review-policy.md', import.meta.url);
+const workspaceSkillUrl = new URL('../skills/webmcp-workspace/SKILL.md', import.meta.url);
 
 test('repository CI runs the complete gate with read-only GitHub permissions', async () => {
   const workflow = await readFile(workflowUrl, 'utf8');
@@ -16,9 +17,9 @@ test('repository CI runs the complete gate with read-only GitHub permissions', a
   assert.doesNotMatch(workflow, /pull_request_target|contents: write|id-token: write/);
 });
 
-test('DevSpace Git instructions keep development publication off main', async () => {
+test('WebMCP Plus Git instructions keep development publication off main', async () => {
   const instructions = await readFile(instructionsUrl, 'utf8');
-  assert.match(instructions, /explicitly asks a DevSpace development executor to commit and push/);
+  assert.match(instructions, /explicitly asks a WebMCP Plus development executor to commit and push/);
   assert.match(instructions, /chatgpt\/<short-task-name>/);
   assert.match(instructions, /must not push directly to `main`/);
   assert.match(instructions, /must not push directly to `main` or merge its own review branch/);
@@ -26,6 +27,44 @@ test('DevSpace Git instructions keep development publication off main', async ()
   assert.match(instructions, /Do not commit secrets/);
   assert.match(instructions, /not permission to act automatically/);
   assert.match(instructions, /docs\/release-review-policy\.md/);
+});
+
+test('WebMCP workspace Skill carries the conversation-resume workflow without destructive recovery', async () => {
+  const skill = await readFile(workspaceSkillUrl, 'utf8');
+  // Assert the distinct workflow rules, not the surrounding prose: rewording the
+  // Skill must stay possible without breaking the gate.
+  assert.match(skill, /bounded rolling semantic checkpoint/);
+  assert.match(skill, /\/workspace\/\.webmcp\/resumes\/<project-id>\.md/);
+  assert.match(skill, /not inside the user's Git repository/);
+  assert.match(skill, /\/workspace\/CHATGPT-RESUME\.md.*pointer-only/);
+  assert.doesNotMatch(skill, /<project>\/CHATGPT-RESUME\.md/);
+  for (const section of [
+    'Stable context',
+    'Live checkpoint',
+    'Current objective',
+    'Completed in this task',
+    'Currently in progress',
+    'Important findings/decisions',
+    'Files currently involved',
+    'Last validation',
+    'Known blockers',
+    'Exact next action',
+  ]) {
+    assert.ok(skill.includes(section), `Skill must define the ${section} checkpoint section`);
+  }
+  assert.match(skill, /whole current task as a small number of compressed summary bullets/);
+  assert.match(skill, /meaningful semantic state changes, not on a timer and not after every tool call/);
+  assert.match(skill, /Do not checkpoint ordinary reads\/searches, individual edits, every test case/);
+  assert.match(skill, /Never present an earlier PASS as validating changes made after that PASS/);
+  assert.match(skill, /vague text such as `continue implementation` is not sufficient/);
+  assert.match(skill, /Recovery is reconciliation, not replay/);
+  assert.match(skill, /Current user instruction has highest priority/);
+  assert.match(skill, /current authoritative plan overrides stale Resume intent/);
+  assert.match(skill, /Git\/filesystem are authoritative for what actually happened/);
+  assert.match(skill, /retry WebMCP once/);
+  assert.match(skill, /do not bypass WebMCP through another filesystem channel/);
+  assert.match(skill, /Do not add a checkpoint MCP tool, task\/session database, checkpoint IDs\/history, timer autosave, daemon\/watchdog, automatic Git commits/);
+  assert.doesNotMatch(skill, /\bgit (?:reset|restore|clean|stash)\b/);
 });
 
 test('independent release policy requires review and explicit authorization before publication', async () => {

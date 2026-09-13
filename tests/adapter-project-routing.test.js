@@ -18,15 +18,6 @@ hosts:
   host-b:
     app: devspace-host-b
     approvedRoot: "/work/Other"
-projects:
-  webmcp-bridge:
-    host: host-a
-    path: "/work/My code/webmcp-bridge"
-    aliases:
-      - "WebMCP Bridge"
-  remote-project:
-    host: host-b
-    path: "/work/Other/remote-project"
 `;
 
 function toolCall(reference) {
@@ -73,9 +64,9 @@ test('loads the canonical repository registry and selects the sole current host'
     new URL('../config/devspace-projects.yaml', import.meta.url),
   );
   assert.equal(registry.currentHostId, 'macbook-pro');
-  assert.equal(registry.resolve('webmcp-bridge').status, 'unique');
-  assert.equal(registry.resolve('WebMCP Bridge').project.path, '/work/My code/webmcp-bridge');
-  assert.equal(registry.resolve('/work/My code/webmcp-bridge').status, 'unique');
+  assert.equal(registry.approvedRoot, '/work/My code');
+  assert.equal(registry.resolve('/work/My code').status, 'unique');
+  assert.equal(registry.resolve('/work/My code/webmcp-bridge').status, 'missing');
 });
 
 test('requires an explicit current host once the registry has multiple hosts', () => {
@@ -85,16 +76,14 @@ test('requires an explicit current host once the registry has multiple hosts', (
   );
 });
 
-test('resolver is deterministic and fails closed for missing or wrong-backend projects', () => {
+test('resolver accepts only the current host approved root and fails closed for every other path', () => {
   const registry = parseProjectRegistry(FIXTURE, { currentHostId: 'host-a' });
-  assert.equal(registry.resolve('webmcp-bridge').status, 'unique');
-  assert.equal(registry.resolve('WebMCP Bridge').status, 'unique');
-  assert.equal(registry.resolve('/work/My code/webmcp-bridge').status, 'unique');
-  assert.equal(registry.resolve('/work/webmcp-bridge').status, 'missing');
-  assert.equal(registry.resolve('definitely-not-a-real-project').status, 'missing');
+  assert.equal(registry.resolve('/work/My code').status, 'unique');
+  assert.equal(registry.resolve('/work/My code/webmcp-bridge').status, 'missing');
   assert.equal(registry.resolve('/work/My code/definitely-not-a-real-project').status, 'missing');
-  assert.equal(registry.resolve('remote-project').status, 'backend_unavailable');
-  assert.equal(registry.resolve('/work/Other/remote-project').status, 'backend_unavailable');
+  assert.equal(registry.resolve('/work/Other').status, 'missing');
+  assert.equal(registry.resolve('webmcp-bridge').status, 'missing');
+  assert.equal(registry.resolve('../../something').status, 'missing');
 });
 
 test('open_workspace fails closed when no registry is available', () => {
@@ -103,15 +92,17 @@ test('open_workspace fails closed when no registry is available', () => {
   assert.equal(denied.reason, 'project_registry_unavailable');
 });
 
-test('open_workspace routing rewrites only a registered reference to the exact path', () => {
+test('open_workspace routing accepts only the approved root', () => {
   const registry = parseProjectRegistry(FIXTURE, { currentHostId: 'host-a' });
-  const routed = routeOpenWorkspaceCall(toolCall('WebMCP Bridge'), registry);
+  const routed = routeOpenWorkspaceCall(toolCall('/work/My code'), registry);
   assert.equal(routed.allowed, true);
-  assert.equal(routed.projectId, 'webmcp-bridge');
-  assert.equal(routed.payload.params.arguments.path, '/work/My code/webmcp-bridge');
+  assert.equal(routed.workspaceRoot, '/work/My code');
+  assert.equal(routed.payload.params.arguments.path, '/work/My code');
   assert.equal(routed.payload.params.arguments.mode, 'checkout');
 
   for (const reference of [
+    '/work/My code/webmcp-bridge',
+    ' /work/My code ',
     '/work/webmcp-bridge',
     'definitely-not-a-real-project',
     '/work/My code/definitely-not-a-real-project',
@@ -122,7 +113,7 @@ test('open_workspace routing rewrites only a registered reference to the exact p
   }
 });
 
-test('tools/list advertises registered references instead of inviting guessed filesystem paths', () => {
+test('tools/list advertises only the approved workspace root', () => {
   const registry = parseProjectRegistry(FIXTURE, { currentHostId: 'host-a' });
   const payload = rewriteToolsListPayload({
     jsonrpc: '2.0',
@@ -140,12 +131,8 @@ test('tools/list advertises registered references instead of inviting guessed fi
     },
   }, registry);
   const tool = payload.result.tools[0];
-  assert.match(tool.description, /registered project/i);
-  assert.deepEqual(tool.inputSchema.properties.path.enum, [
-    'webmcp-bridge',
-    'WebMCP Bridge',
-    '/work/My code/webmcp-bridge',
-  ]);
+  assert.match(tool.description, /approved workspace root/i);
+  assert.deepEqual(tool.inputSchema.properties.path.enum, ['/work/My code']);
   assert.equal(tool.inputSchema.properties.mode.type, 'string');
 });
 
@@ -182,7 +169,7 @@ test('tools/list explicitly permits user-authorized Git commit and push operatio
   assert.equal(tool.inputSchema.properties.workspaceId.type, 'string');
 });
 
-test('adapter blocks unknown open_workspace before upstream and rewrites a registered alias in one call', async () => {
+test('adapter blocks every non-root open_workspace request before upstream', async () => {
   const registry = parseProjectRegistry(FIXTURE, { currentHostId: 'host-a' });
   const { core, seen } = makeCore(registry, (request) => ({
     jsonrpc: '2.0',
@@ -190,14 +177,14 @@ test('adapter blocks unknown open_workspace before upstream and rewrites a regis
     result: { ok: true },
   }));
 
-  const denied = await core.handle(toolCall('definitely-not-a-real-project'));
+  const denied = await core.handle(toolCall('/work/My code/definitely-not-a-real-project'));
   assert.equal(denied.status, 200);
   assert.equal(seen.length, 0);
 
-  const allowed = await core.handle(toolCall('WebMCP Bridge'));
+  const allowed = await core.handle(toolCall('/work/My code'));
   assert.equal(allowed.status, 200);
   assert.equal(seen.length, 1);
-  assert.equal(seen[0].params.arguments.path, '/work/My code/webmcp-bridge');
+  assert.equal(seen[0].params.arguments.path, '/work/My code');
 });
 
 test('adapter rewrites the live open_workspace schema returned by tools/list', async () => {
@@ -214,9 +201,5 @@ test('adapter rewrites the live open_workspace schema returned by tools/list', a
 
   const result = await core.handle({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
   const parsed = JSON.parse(result.body);
-  assert.deepEqual(parsed.result.tools[0].inputSchema.properties.path.enum, [
-    'webmcp-bridge',
-    'WebMCP Bridge',
-    '/work/My code/webmcp-bridge',
-  ]);
+  assert.deepEqual(parsed.result.tools[0].inputSchema.properties.path.enum, ['/work/My code']);
 });

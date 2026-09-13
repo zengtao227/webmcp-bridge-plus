@@ -64,7 +64,7 @@ function sha256(buffer) {
   return createHash('sha256').update(buffer).digest('hex');
 }
 
-function normalizePayloadPaths(payloadPaths) {
+function normalizePayloadPaths(payloadPaths, entrypoint = ENTRYPOINT) {
   if (!Array.isArray(payloadPaths) || payloadPaths.length === 0) {
     fail('Host runtime payload must contain at least one file.', 'INVALID_PAYLOAD');
   }
@@ -83,8 +83,8 @@ function normalizePayloadPaths(payloadPaths) {
       fail(`Invalid host runtime payload path: ${String(relativePath)}`, 'INVALID_PAYLOAD');
     }
   }
-  if (!normalized.includes(ENTRYPOINT)) {
-    fail(`Host runtime payload must include ${ENTRYPOINT}.`, 'INVALID_PAYLOAD');
+  if (!normalized.includes(entrypoint)) {
+    fail(`Host runtime payload must include ${entrypoint}.`, 'INVALID_PAYLOAD');
   }
   return normalized;
 }
@@ -120,8 +120,8 @@ async function runGitBuffer(sourceRoot, args) {
   }
 }
 
-function outputMode(relativePath) {
-  return relativePath === ENTRYPOINT ? 0o700 : 0o600;
+function outputMode(relativePath, entrypoint = ENTRYPOINT) {
+  return relativePath === entrypoint ? 0o700 : 0o600;
 }
 
 function payloadDigest(files) {
@@ -181,7 +181,7 @@ async function ensureHostOnlyRoot({
 
   const runtimeResolved = path.resolve(runtimeRoot);
   if (boundaries.some((boundary) => isWithin(boundary, runtimeResolved))) {
-    fail('Host runtime root must be outside every DevSpace-writable root.', 'UNSAFE_RUNTIME_ROOT');
+    fail('Host runtime root must be outside every WebMCP-writable root.', 'UNSAFE_RUNTIME_ROOT');
   }
 
   try {
@@ -202,7 +202,7 @@ async function ensureHostOnlyRoot({
     fail('Host runtime root must be a real directory, not a symlink.', 'UNSAFE_RUNTIME_ROOT');
   }
   if (boundaries.some((boundary) => isWithin(boundary, runtimeReal))) {
-    fail('Host runtime root must be outside every DevSpace-writable root.', 'UNSAFE_RUNTIME_ROOT');
+    fail('Host runtime root must be outside every WebMCP-writable root.', 'UNSAFE_RUNTIME_ROOT');
   }
   return Object.freeze({ runtimeReal, writableBoundaries: boundaries });
 }
@@ -210,8 +210,9 @@ async function ensureHostOnlyRoot({
 export async function inspectSource({
   sourceRoot,
   payloadPaths = HOST_RUNTIME_PAYLOAD,
+  entrypoint = ENTRYPOINT,
 }) {
-  const normalizedPayload = normalizePayloadPaths(payloadPaths);
+  const normalizedPayload = normalizePayloadPaths(payloadPaths, entrypoint);
   const sourceAbsolute = path.resolve(sourceRoot);
   const sourceReal = await realpath(sourceAbsolute);
   const gitRoot = (await runGitText(sourceReal, ['rev-parse', '--show-toplevel'])).trim();
@@ -297,7 +298,7 @@ export async function inspectSource({
       bytes: headBytes,
       sha256: sha256(headBytes),
       size: headBytes.length,
-      mode: outputMode(relativePath).toString(8).padStart(4, '0'),
+      mode: outputMode(relativePath, entrypoint).toString(8).padStart(4, '0'),
     }));
   }
 
@@ -337,6 +338,7 @@ async function listReleaseFiles(root, current = '') {
 export async function verifyRelease(releaseDir, {
   expectedArtifactId = null,
   expectedPayloadSha256 = null,
+  entrypoint = ENTRYPOINT,
 } = {}) {
   const releaseStat = await lstat(releaseDir);
   if (!releaseStat.isDirectory() || releaseStat.isSymbolicLink()) {
@@ -359,7 +361,7 @@ export async function verifyRelease(releaseDir, {
     || !/^[0-9a-f]{64}$/.test(manifest.payloadSha256)
     || typeof manifest.createdAt !== 'string'
     || Number.isNaN(Date.parse(manifest.createdAt))
-    || manifest.entrypoint !== ENTRYPOINT
+    || manifest.entrypoint !== entrypoint
     || !Array.isArray(manifest.files)
   ) {
     fail('Runtime manifest shape is invalid.', 'INVALID_RUNTIME_MANIFEST');
@@ -420,11 +422,11 @@ export async function verifyRelease(releaseDir, {
     fail('Runtime artifact ID is inconsistent with its manifest.', 'RUNTIME_MANIFEST_MISMATCH');
   }
 
-  const entrypoint = path.join(releaseDir, ENTRYPOINT);
-  return Object.freeze({ manifest, entrypoint });
+  const verifiedEntrypoint = path.join(releaseDir, entrypoint);
+  return Object.freeze({ manifest, entrypoint: verifiedEntrypoint });
 }
 
-export async function verifyCurrent(runtimeRoot) {
+export async function verifyCurrent(runtimeRoot, { entrypoint = ENTRYPOINT } = {}) {
   const rootReal = await realpath(runtimeRoot);
   const currentPath = path.join(rootReal, 'current');
   let currentStat;
@@ -443,11 +445,11 @@ export async function verifyCurrent(runtimeRoot) {
   if (!isWithin(releasesRoot, resolvedTarget)) {
     fail('Host runtime current pointer escapes the releases directory.', 'INVALID_CURRENT_POINTER');
   }
-  const verified = await verifyRelease(resolvedTarget);
+  const verified = await verifyRelease(resolvedTarget, { entrypoint });
   return Object.freeze({
     artifactId: verified.manifest.artifactId,
     releaseDir: resolvedTarget,
-    entrypoint: path.join(currentPath, ENTRYPOINT),
+    entrypoint: path.join(currentPath, entrypoint),
   });
 }
 
@@ -462,6 +464,7 @@ export async function deployHostRuntime({
   writableRoots = [],
   defaultWritableRoot = DEFAULT_WRITABLE_ROOT,
   payloadPaths = HOST_RUNTIME_PAYLOAD,
+  entrypoint = ENTRYPOINT,
   now = () => new Date(),
   id = () => randomUUID(),
   writePayloadFile = defaultWritePayloadFile,
@@ -486,8 +489,8 @@ export async function deployHostRuntime({
     additionalWritableRoots,
   });
 
-  const existingCurrent = await verifyCurrent(runtimeAbsolute);
-  const source = await inspectSource({ sourceRoot: sourceAbsolute, payloadPaths });
+  const existingCurrent = await verifyCurrent(runtimeAbsolute, { entrypoint });
+  const source = await inspectSource({ sourceRoot: sourceAbsolute, payloadPaths, entrypoint });
   const releasesDir = path.join(runtimeAbsolute, 'releases');
   await mkdir(releasesDir, { recursive: true, mode: 0o700 });
 
@@ -522,7 +525,7 @@ export async function deployHostRuntime({
         gitCommit: source.gitCommit,
         payloadSha256: source.payloadSha256,
         createdAt: createdAtIso,
-        entrypoint: ENTRYPOINT,
+        entrypoint,
         files: source.files.map(({ path: filePath, sha256: digest, size, mode }) => ({
           path: filePath,
           sha256: digest,
@@ -534,6 +537,7 @@ export async function deployHostRuntime({
       await verifyRelease(staging, {
         expectedArtifactId: source.artifactId,
         expectedPayloadSha256: source.payloadSha256,
+        entrypoint,
       });
       await rename(staging, finalRelease);
       stagingExists = false;
@@ -541,12 +545,14 @@ export async function deployHostRuntime({
       await verifyRelease(finalRelease, {
         expectedArtifactId: source.artifactId,
         expectedPayloadSha256: source.payloadSha256,
+        entrypoint,
       });
     }
 
     await verifyRelease(finalRelease, {
       expectedArtifactId: source.artifactId,
       expectedPayloadSha256: source.payloadSha256,
+      entrypoint,
     });
 
     const currentPath = path.join(runtimeAbsolute, 'current');
@@ -560,7 +566,7 @@ export async function deployHostRuntime({
       throw error;
     }
 
-    const current = await verifyCurrent(runtimeAbsolute);
+    const current = await verifyCurrent(runtimeAbsolute, { entrypoint });
     let currentTarget;
     try {
       currentTarget = await readlink(currentPath);

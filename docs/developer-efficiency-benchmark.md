@@ -1,9 +1,9 @@
 # DevSpace Developer Efficiency Benchmark
 
-Status: Active measurement
+Status: Historical DevSpace baseline; repository-local workflow commands remain available for current WebMCP work
 First real-task sample: 2026-09-10
 
-This benchmark measures whether normal DevSpace development can become faster by reducing predictable tool round trips without weakening validation or expanding the MCP/security surface.
+This benchmark measured whether the former DevSpace development path could become faster by reducing predictable tool round trips without weakening validation or expanding the MCP/security surface. Its measured DevSpace timings are historical; the batching principle and repository-local commands remain applicable to current Native WebMCP work.
 
 ## 1. What is being optimized
 
@@ -95,6 +95,40 @@ Observed result:
 
 Across these two fixed phases, the controlled structure changes from **7 DevSpace round trips to 2 (71.4% reduction)** while retaining the same fixed checks.
 
+### Current Native WebMCP result (2026-09-13)
+
+The same controlled comparison was repeated after Native WebMCP became the production runtime, using the current five-tool WebMCP surface and the same repository-local workflows.
+
+#### Inspection
+
+| Mode | WebMCP round trips | Phase elapsed | Local fixed commands |
+| --- | ---: | ---: | ---: |
+| Separate calls baseline | 4 | 22,585 ms | ~106 ms total |
+| `devspace:inspect` | 1 | 224 ms | 69 ms workflow |
+
+Observed result:
+
+- round trips: **4 → 1 (75% reduction)**;
+- measured phase elapsed: **22.585 s → 0.224 s (~99.0% reduction in this sample)**;
+- the fixed Git work remained sub-100-ms scale, so repeated tool orchestration still dominated the unbatched path.
+
+#### Validation
+
+| Mode | WebMCP round trips | Phase elapsed | Repository check |
+| --- | ---: | ---: | ---: |
+| Separate calls baseline | 3 | 30,577 ms | ~17,170 ms |
+| `devspace:validate` | 1 | 17,379 ms | 17,175 ms workflow step |
+
+Observed result:
+
+- round trips: **3 → 1 (66.7% reduction)**;
+- measured phase elapsed: **30.577 s → 17.379 s (~43.2% reduction in this sample)**;
+- most remaining elapsed time is now the real repository test/build work rather than WebMCP orchestration.
+
+The first optimized validation attempt encountered one transient final `git status` failure reporting Git `dubious ownership`. Immediate inspection showed the runtime uid and repository ownership matched, standalone shell and Node-spawned `git status` both passed, and the next complete `devspace:validate` run passed. No retry or ownership workaround was added because the issue was not reproducible; fail-closed behavior is preferable to masking an unexplained repository-state check.
+
+This second, Native-era sample confirms the original direction: repository-local batching captures the material efficiency gain without adding new MCP methods or permissions.
+
 ## 5. Quality result from the self-hosted change
 
 The Developer Efficiency implementation was itself used as the first real development task.
@@ -147,7 +181,7 @@ The fixed workflows are **mechanical batching only**. They do not replace task-s
 
 For each meaningful future task, record at least:
 
-- DevSpace round trips;
+- WebMCP round trips;
 - dependency-required serial rounds;
 - avoidable/redundant calls discovered;
 - first validation pass success/failure;
@@ -155,10 +189,12 @@ For each meaningful future task, record at least:
 - whether batching reduced clarity or correctness;
 - phase elapsed time when a useful controlled comparison is available.
 
-## 7. Phase 2 decision rule
+## 7. Phase 2 decision
 
-The first sample does **not** justify adding `inspect_workspace` or `validate_workspace` to the MCP surface.
+**Decision after the historical DevSpace sample and the 2026-09-13 Native WebMCP sample: keep the current five-tool MCP surface.**
 
-Repository-local batching already removes most of the fixed round-trip overhead while preserving the current five-tool DevSpace surface and security boundaries. Continue collecting real-task measurements. Only reconsider composite MCP capabilities if repeated tasks show material overhead that cannot be removed by safe batched `bash`/`read` usage.
+`inspect_workspace` and `validate_workspace` are not justified. Repository-local batching already removes the material fixed round-trip overhead while preserving the existing security boundary, and the Native validation sample shows that most remaining time is genuine test/build execution.
+
+Reopen this decision only if repeated future tasks show material overhead that cannot be removed by safe batched `bash`/`read` usage. Do not add a composite MCP tool merely to rename an existing repository workflow.
 
 Likewise, a batch-write capability remains out of scope unless future evidence shows a strong need and it passes a separate security review.

@@ -18,7 +18,7 @@ Quality, correctness, and security take priority over latency or tool-call count
 
 ### Development executor
 
-A development executor is an agent working through the Web/DevSpace development path, such as ChatGPT using `@DevSpace`.
+A development executor is an agent working through the Native WebMCP development path, such as ChatGPT using `@WebMCP`.
 
 Its responsibilities are to:
 
@@ -28,11 +28,11 @@ Its responsibilities are to:
 - run the relevant tests and repository validation;
 - leave a reviewable working tree or, when explicitly requested, publish a review branch.
 
-A DevSpace development executor must **not** push directly to `main` and must not merge its own review branch. Its Git limits are defined by [`../AGENTS.md`](../AGENTS.md).
+A WebMCP development executor must **not** push directly to `main` and must not merge its own review branch. Its Git limits are defined by [`../AGENTS.md`](../AGENTS.md).
 
 ### Independent release reviewer
 
-An independent release reviewer is a separately invoked reviewer operating outside the Web/DevSpace development execution path, for example an independently run Claude or Codex review session.
+An independent release reviewer is a separately invoked reviewer operating outside the WebMCP development execution path, for example an independently run Claude or Codex review session.
 
 The reviewer is the final release approver and is responsible for carrying an approved change through to `main` itself, using whichever mechanism the repository's actual branch protection permits — it must not assume a specific mechanism in advance.
 
@@ -128,7 +128,7 @@ Opening a pull request and merging it, when the repository's branch protection r
 The expected successful flow is:
 
 ```text
-DevSpace development executor
+WebMCP development executor
 → implementation + first validation
 → independent release reviewer
 → independent semantic/security review

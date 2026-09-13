@@ -1,6 +1,6 @@
 # Tunnel host-runtime boundary
 
-Status: Phase A source remediation implemented; live migration intentionally not performed in this change.
+Status: Historical DevSpace Phase A design. This host-runtime snapshot boundary was part of the retired DevSpace migration path and is preserved as security/design history; Native WebMCP is the current production runtime.
 
 ## Security invariant
 

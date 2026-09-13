@@ -1,30 +1,35 @@
 # Security Policy
 
-WebMCP Bridge exists to make browser-based AI coding safer. Security controls in this repository are part of the product contract, not optional guidance to the model.
+WebMCP Bridge exists to make AI-assisted local development safer. Security controls in this repository are part of the product contract, not optional guidance to the model.
+
+Native WebMCP is the current production architecture. The former DevSpace runtime is retired from the production execution path. DeepSeek/Chrome-extension code remains a separate provider subsystem and does not define the Native host/runtime trust boundary.
 
 ## Trust boundaries
 
 Treat all of the following as untrusted unless explicitly validated:
 
 - model-generated tool requests;
-- DeepSeek page content and page-originated messages;
-- MCP tool results;
-- repository contents returned by tools;
-- remote MCP server metadata and errors;
+- MCP requests, results, runtime diagnostics, and remote metadata;
+- repository/workspace contents returned by tools;
+- files the model can modify inside the owner-selected workspace;
+- DeepSeek page content and page-originated messages when that provider subsystem is used;
 - user-supplied custom redaction patterns.
 
 The AI model is not part of the trusted computing base.
 
 ## Security invariants
 
-1. **Secret Firewall before model context.** No MCP tool result may be forwarded to DeepSeek until deterministic path/tool/content policy has approved or redacted it.
-2. **Blocked files are blocked before read whenever possible.** The bridge should deny requests for known-sensitive paths instead of relying only on post-read redaction.
-3. **Fail closed.** Invalid policy configuration, malformed custom patterns, or ambiguous sensitive operations must not silently weaken filtering.
-4. **No secret logging.** Logs must never contain raw session credentials, MCP bearer/refresh tokens, API keys, private keys, passwords, passphrases, or blocked file contents.
-5. **Least privilege.** Chrome permissions must stay limited to the DeepSeek origin, extension storage required for non-secret configuration, and explicitly approved MCP origins.
-6. **No host privilege expansion.** The extension must not gain Native Messaging, direct host filesystem access, Docker socket access, or arbitrary host shell in the MVP.
-7. **Session credentials stay ephemeral.** DeepSeek Web session credentials must not be persisted to `chrome.storage`, disk, logs, MCP, analytics, or third parties.
-8. **Tests use fake credentials only.** Never place real exchange, cloud, source-control, wallet, database, SSH, or DeepSeek credentials in tests or fixtures.
+1. **Secret Firewall before model context.** Native JSON-RPC results and diagnostics cross the independent host response boundary only after deterministic validation/redaction. Provider-specific forwarding must not bypass the same principle.
+2. **Blocked files are blocked before read whenever possible.** Structured Native file tools deny known-sensitive paths before returning content instead of relying only on post-read redaction.
+3. **Fail closed.** Invalid policy/configuration, image/source mismatch, container-policy drift, malformed output, or ambiguous sensitive operations must not silently weaken the boundary.
+4. **No secret logging.** Logs must never contain raw tunnel/runtime credentials, MCP bearer/refresh tokens, API keys, private keys, passwords, passphrases, or blocked file contents.
+5. **Containerized execution, not host-user execution.** Filesystem and `bash` tools execute inside the verified Native container. The Docker socket is not mounted, the runtime is non-root, capabilities are dropped, and `no-new-privileges` is required.
+6. **Fixed MCP root.** The model sees only `/workspace`. The owner selects the host filesystem root mapped there; protected WebMCP/tunnel control-plane paths remain carved out from model access.
+7. **Host control plane stays outside model-writable workspace.** Tunnel credentials, runtime configuration, source/image pins, LaunchAgent state, and immutable host runtime material must not become ordinary workspace files.
+8. **Git publication is separately authorized.** Normal coding does not require a host Git credential. When publication is enabled, use only repository-scoped, revocable, read-only-mounted credential material plus explicit Git identity and strict host-key checking.
+9. **Provider least privilege.** Chrome permissions for the optional DeepSeek subsystem stay limited to the DeepSeek origin, non-secret configuration storage, and explicitly approved MCP origins.
+10. **Session credentials stay ephemeral.** DeepSeek Web session credentials must not be persisted to `chrome.storage`, disk, logs, MCP, analytics, or third parties.
+11. **Tests use fake credentials only.** Never place real exchange, cloud, source-control, wallet, database, SSH, tunnel, or DeepSeek credentials in tests or fixtures.
 
 ## Secret Firewall behavior
 
@@ -72,62 +77,71 @@ Before any implementation that copies a DeepSeek session credential into an exte
 
 That design requires explicit review before merging.
 
-## MCP / OAuth requirements
+## MCP / tunnel requirements
 
-MCP endpoint configuration may be persisted only when it contains no bearer/access/refresh token. OAuth tokens and equivalent authorization material must use an appropriate ephemeral or browser-managed mechanism and must never be included in diagnostics.
+The production Secure MCP Tunnel connects to the immutable Native host entrypoint. The local MCP relay uses stdio framing: stdout is reserved for JSON-RPC and diagnostics go to stderr.
 
-MCP server host access should be requested per approved HTTPS origin rather than through blanket `http://*/*`, `https://*/*`, or `<all_urls>` permissions.
+Tunnel/runtime credentials remain host-side and are not mounted into the Native container or exposed as MCP configuration. OAuth/access/refresh tokens used by optional provider integrations must remain isolated from model-visible messages and diagnostics.
 
-For the local DevSpace tunnel deployment, the adapter transport defaults to
-stdio and stdout is reserved exclusively for JSON-RPC. Diagnostics go to stderr.
-HTTP mode is for explicit debugging only and refuses to start without a bearer
-token; loopback address membership is not treated as caller identity.
+Provider-side MCP origin access, when applicable, should be requested per approved HTTPS origin rather than through blanket `http://*/*`, `https://*/*`, or `<all_urls>` permissions.
 
-## Docker / DevSpace boundary
+The retired DevSpace stdio adapter/OAuth/session mechanisms are historical migration implementation, not production requirements.
 
-The intended backend sandbox mounts only explicitly approved project directories. Do not mount the host home directory, `/`, `~/.ssh`, `~/.aws`, password stores, or `/var/run/docker.sock`, and do not blindly pass host environment variables into the sandbox.
+## Native container boundary
 
-The DevSpace adapter forwards only the reviewed tool names
-`open_workspace`, `read`, `write`, `edit`, and `bash`. A backend upgrade cannot
-silently add a newly privileged tool. Because shell text cannot be parsed into a
-complete set of filesystem accesses, the `bash` boundary depends on the Docker
-mount allowlist, credential-file overlays, and result redaction as well as the
-request path checks.
+The production backend is the verified Native container. The model-visible filesystem root is always `/workspace`, backed by an owner-selected host root. The safest normal configuration is the narrowest root that satisfies the task. macOS `/` is not an accepted normal root, and the Docker socket must never be mounted.
 
-The Secret Firewall is defense in depth; it does not replace sandbox isolation.
+The Native server exposes exactly five reviewed tools:
 
-### Git publication from DevSpace
+- `open_workspace`;
+- `read`;
+- `write`;
+- `edit`;
+- `bash`.
 
-DevSpace may advertise Git read/write commands, including commit and push, as an
-explicitly supported use of its workspace shell. This does not grant access to a
-personal GitHub credential or permission to update the default branch directly.
+Structured path-bearing tools enforce lexical/canonical workspace containment, sensitive-path policy, bounded files, and symlink-safe read/write behavior. `bash` is intentionally more powerful and cannot be reduced to structured path checks, so the workspace mount boundary and protected control-plane carve-outs are primary controls.
 
-For `webmcp-bridge`, remote publication must use a repository-scoped, revocable
-credential that cannot access other repositories. GitHub protects `main`; the
-DevSpace identity may publish only review branches such as `chatgpt/*`. It must
-not receive repository administration, Actions/workflow write, secrets, tag
-deletion, force-push, or protection-bypass capability.
+The container controller verifies the exact reviewed image/source identity and policy before any `docker exec`. It also verifies non-root identity, `CapDrop=ALL`, `no-new-privileges`, network mode, workspace mount, and any separately authorized Git secret mounts. Unexpected drift fails closed.
 
-The repository credential is still readable by processes inside the DevSpace
-container and must therefore be treated as potentially compromised. Branch
-protection, narrow repository scope, revocability, and the absence of access to
-other private repositories are the security boundary. Never mount the owner's
-general-purpose SSH key, GitHub CLI token, or credential store.
+The Secret Firewall is defense in depth; it does not replace careful root selection or container isolation.
+
+### Temporary elevated filesystem access
+
+v1.1 adds a local-owner-controlled, time-bound filesystem lease without changing the five-tool MCP surface. The model cannot create, extend, renew, restore, or reactivate a lease. Grant begins from the immutable host CLI and requires a final approval in the logged-in macOS GUI session through the system `osascript` dialog; a remote SSH/pseudo-TTY session cannot replace that local approval. There is deliberately no remote endpoint, MCP tool, writable trigger file, generic permission framework, or cloud lease service. The elevation lifecycle CLI itself must execute from the verified source-gated immutable host snapshot; a writable repository checkout is not an authority-grant path.
+
+The lease file lives in the protected WebMCP host control plane with mode `0600`. It carries a random lease identity, the current macOS boot identity, the current GUI login/audit-session identity, normal/elevated roots, and issue/absolute-expiry times. Missing, malformed, stale, expired, reboot-mismatched, login-session-mismatched, or normal-config-mismatched state is not authority.
+
+An active lease does not move execution onto the host. The existing verified Native container is recreated with the owner-selected elevated root still mounted at `/workspace`, and it remains non-root with `CapDrop=ALL`, `no-new-privileges`, no Docker socket, the Secret Firewall, and the same protected control-plane masks. Elevated mode additionally forces network off and does not expose optional Git publication credentials. Literal macOS `/` remains unsupported.
+
+Authorization is a fixed duration with a default and maximum of one hour; it is never automatically or remotely renewed. The immutable host relay keeps request bytes opaque and, before forwarding new input while elevated, checks the same absolute lease deadline used by the expiry timer. Once that deadline is reached, no new input is forwarded and the existing revocation path is triggered. Revocation/expiry stops the active executor, invalidates the lease, removes the temporary elevated container, and restores the normal workspace policy. If safe normal restoration cannot be proven, the service remains stopped/fail-closed.
+
+A reboot or GUI logout/login never restores elevated authority because the lease is bound to both boot and GUI login/audit-session identity. An already-active lease remains usable by the connected WebMCP tunnel until it expires or is killed locally; v1.1 does not claim browser-session binding.
+
+### Git publication from Native WebMCP
+
+Git read/local-write operations inside the selected workspace do not require a host Git credential. Commit/push is an explicit user-authorized capability, not an automatic consequence of `bash`.
+
+For `webmcp-bridge`, remote publication must use a dedicated, repository-scoped, revocable credential that cannot access unrelated repositories. The development identity must not receive repository administration, Actions/workflow write, secrets, tag deletion, force-push, or protection-bypass capability, and it must not publish directly to `main` when acting as the WebMCP development executor.
+
+Credential material is read-only inside the Native container but must still be treated as potentially compromised by any process running there. Branch protection, narrow repository scope, revocability, strict SSH host-key checking, and separation from the owner's general-purpose SSH/GitHub credentials are part of the security boundary.
 
 ## Host-executed runtime boundary
 
-Anything that DevSpace can modify must be treated as untrusted development input,
-including the checked-out repository under `~/Doc/My code` / `/work/My code`.
-No LaunchAgent, tunnel runtime, or other unattended host process may execute code
-through that writable tree or through a symlink that resolves into it.
+Anything the model can modify beneath the owner-selected host root must be treated as untrusted development input. No LaunchAgent, tunnel runtime, container controller, or other unattended host process may execute mutable code through that workspace or through a symlink resolving into it.
 
-The private Tunnel therefore runs the adapter from a reviewed host-only snapshot
-under `~/Doc/devspace-container/runtime/webmcp-adapter`. The repository remains the
-canonical source, but deployment copies an exact Git-verified payload into an
-immutable release directory, verifies its manifest and file digests, then atomically
-switches a host-only `current` pointer. Runtime configuration such as
-`config/devspace-projects.yaml` changes only when a new reviewed snapshot is
-deployed.
+Production host execution therefore uses immutable, source-gated runtime material outside the model-writable workspace. Before relay startup, the host boundary verifies the reviewed configuration, image/source identity, and expected container policy; only then may it start the Native MCP process through `docker exec`.
+
+Protected WebMCP configuration/runtime state, tunnel/LaunchAgent state, and optional Git credentials remain host-side or explicitly masked from the workspace. The retired DevSpace host snapshot/recovery layout may remain in historical documents, but it is not a current production dependency.
+
+### Installer boundary
+
+The Base installer must configure the existing Native architecture rather than weaken or duplicate it. It fails before installation on missing dependencies and refuses partial, unsafe or unknown existing state instead of guessing ownership.
+
+The permanent LaunchAgent executes only the protected managed `tunnel-client`, never repository source. Its `node` and `docker` dependencies must resolve outside the selected model-writable workspace root. The generated tunnel profile points only at the immutable Native host entrypoint, and the runtime API key remains a protected host-side file reference rather than a command-line value or container mount.
+
+Fresh-install rollback may remove only artifacts created by that fresh attempt. Reconfiguration first proves the new workspace root, then changes only the verified Native container/configuration and restores the previous configuration/container/service on activation failure. Uninstall verifies installer ownership before removing local artifacts and deliberately preserves the remote tunnel and runtime credential for explicit owner revocation/reuse.
+
+OpenAI tunnel creation/authorization and ChatGPT App connection remain explicit owner actions; the installer does not automate account/security UI decisions.
 
 ## Reporting a vulnerability
 
@@ -139,15 +153,15 @@ For now, report security findings privately to the repository owner through a pr
 
 Changes require security-focused tests when they affect:
 
-- path normalization or path allow/deny logic;
+- Native workspace/path normalization or path allow/deny logic;
+- container/image/source policy or control-plane carve-outs;
 - content scanning/redaction;
-- tool result forwarding;
-- page/content/background message contracts;
-- MCP authorization;
+- host relay/tool result forwarding;
+- tunnel/MCP authorization or framing;
+- Git publication credentials/scope;
+- page/content/background message contracts for the optional browser provider subsystem;
 - Chrome permissions;
 - logging or telemetry;
 - persistence/storage.
 
-Any new Chrome permission or new class of tool capability must also update `docs/threat-model.md`.
-Any new Git publication credential or change to its repository/branch scope
-requires the same security review.
+Any new Chrome permission, host capability, MCP tool class, credential flow, or broader filesystem/network authority must also update `docs/threat-model.md`.

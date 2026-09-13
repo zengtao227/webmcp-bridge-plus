@@ -1,88 +1,105 @@
-# WebMCP Bridge
+# WebMCP Bridge Plus
 
-WebMCP Bridge is an independent Chrome extension project that connects an authenticated browser AI session to a remote MCP development environment while enforcing a deterministic local security boundary before tool output can become model context.
+WebMCP Bridge Plus is a **separate project and product line** built on the stable Native WebMCP execution-host foundation. It is not `webmcp-bridge` v2.0 and it does not replace the single-host product.
 
-Initial target flow:
+The stable `webmcp-bridge` project remains the minimal single-execution-host implementation. Plus inherits that proven runtime and security baseline, then adds a multi-host control plane above independent execution hosts.
+
+Target architecture:
 
 ```text
-DeepSeek Web
+ChatGPT / Web AI
       ↓
-WebMCP Bridge Chrome Extension
+WebMCP Bridge Plus control plane
       ↓
-Remote MCP
-      ↓
-DevSpace
-      ↓
-Docker sandbox
-      ↓
-/work/<approved project>
+explicit host/project routing
+   ┌──┴───────────────┐
+   ↓                  ↓
+execution host A   execution host B
+Native WebMCP      Native WebMCP
+Docker isolation   Docker isolation
+/workspace         /workspace
 ```
 
-On the return path, every untrusted MCP tool result must pass the Secret Firewall before it can be sent back into the DeepSeek conversation.
+Each execution host keeps its own Secure MCP Tunnel identity, immutable host boundary, isolated Native container, `/workspace` root, Secret Firewall, credentials, and local owner controls. Plus must not collapse multiple hosts into one broad filesystem or credential boundary.
 
-## MVP scope
+The repository has been rebased conceptually onto the current Native/V1.1 WebMCP implementation. The former DevSpace runtime and routing work remains only as historical design input where useful. New Plus implementation must use the Native WebMCP execution-host model rather than revive the retired DevSpace production path.
 
-The 0.x MVP has exactly three core capabilities:
+## Native contract
 
-1. DeepSeek Web tool loop using the user's existing `https://chat.deepseek.com` login session.
-2. Remote HTTPS MCP client, with DevSpace as the first backend.
-3. Secret Firewall with deterministic path blocking and content redaction.
+The Native MCP surface intentionally contains exactly five development tools:
 
-The MVP intentionally does **not** implement Native Messaging, direct macOS filesystem access, arbitrary host shell, `chrome.debugger`, general browser automation, broad host permissions, DeepSeek API-key storage, or unrelated cloud-drive/memory features.
+1. `open_workspace`
+2. `read`
+3. `write`
+4. `edit`
+5. `bash`
 
-See [`CONTEXT.md`](./CONTEXT.md) for the locked project baseline.
+`open_workspace` accepts only:
 
-For the current private DevSpace design and day-to-day operation, see:
+```text
+/workspace
+```
 
-- [`docs/architecture.md`](./docs/architecture.md) — current architecture and how it works;
-- [`docs/adr/0001-devspace-private-tunnel.md`](./docs/adr/0001-devspace-private-tunnel.md) — why the legacy public inbound design was retired in favor of Secure MCP Tunnel;
-- [`docs/usage.md`](./docs/usage.md) — how to use `@DevSpace` safely in normal work;
-- [`docs/troubleshooting.md`](./docs/troubleshooting.md) — known pitfalls, failure modes, and investigation order;
-- [`docs/development-roadmap.md`](./docs/development-roadmap.md) — central roadmap, execution-host direction, and DevSpace Developer Efficiency operating standard.
-- [`docs/developer-efficiency-benchmark.md`](./docs/developer-efficiency-benchmark.md) — real-task benchmark method and measured DevSpace round-trip results.
-- [`docs/release-review-policy.md`](./docs/release-review-policy.md) — two-agent author/reviewer release boundary and direct-`main` approval rules.
+`/workspace` exists inside the Native container. The machine owner selects a real host directory such as `~/Projects` or `~/Code`, and the trusted host controller mounts that directory at `/workspace`. Users do **not** create `/workspace` on macOS.
+
+Projects beneath the selected host root do not need individual registration or aliases. Natural-language project discovery happens after `/workspace` is opened by using the existing `read`/`bash` tools.
+
+The inherited Native execution-host layer intentionally stays narrow: five low-level tools, one approved `/workspace`, container isolation, and deterministic host-side security controls. Plus adds routing/orchestration **above** that boundary rather than broadening every host's primitive tool surface by default.
 
 ## Security model
 
-The model is not trusted with unrestricted tool output. High-value credentials must be protected by code enforcement rather than prompt instructions.
+The AI model is not part of the trusted computing base. Important controls are enforced in code:
 
-The first Secret Firewall version provides:
+- filesystem and shell execution run inside the Native container, not directly as the host user;
+- the container runs non-root with `CapDrop=ALL` and `no-new-privileges`;
+- the Docker socket is not mounted into the container;
+- the selected host root is the filesystem blast radius and is mounted at `/workspace`;
+- protected WebMCP/tunnel control-plane paths are carved out even when they fall beneath a broad selected root;
+- structured file tools use canonical path validation and fail closed on traversal/path escape;
+- writes/edits do not follow symlinks;
+- the host relay independently applies the Secret Firewall to Native JSON-RPC results and diagnostics before they leave the host boundary;
+- tunnel/runtime credentials remain host-side and are not mounted into the Native container;
+- Git publication is disabled by default and, when explicitly enabled, uses separate read-only repository-scoped credential mounts and explicit commit identity;
+- image/source/policy drift fails closed before `docker exec`.
 
-- path/file blocking for common secret locations and credential filenames;
-- deterministic redaction for named secrets such as `TOKEN`, `SECRET`, `PASSWORD`, `PRIVATE_KEY`, `API_KEY`, and `PASSPHRASE`;
-- detection of private-key material, JWT-like credentials, common GitHub/AWS token formats, and high-confidence high-entropy values;
-- user-defined regular-expression redaction rules;
-- fail-closed handling for invalid policy input.
+A writable workspace plus arbitrary `bash` is still **host-code authorship**: the model can modify files that the owner may later execute on the host. The safest normal configuration is therefore the narrowest useful host root. Broad filesystem access is a high-trust capability even when container isolation remains intact.
 
 See [`SECURITY.md`](./SECURITY.md) and [`docs/threat-model.md`](./docs/threat-model.md).
+
+## Current validation state
+
+The Native production path has completed the real release gates on the reference macOS host, including:
+
+- real Native image/build and workspace mount validation;
+- Secure MCP Tunnel Native canary;
+- real ChatGPT → WebMCP → Native E2E;
+- permanent Native cutover;
+- macOS reboot recovery;
+- post-reboot ChatGPT validation;
+- DevSpace runtime retirement;
+- final Native smoke test and housekeeping.
+
+Repository-side Native/security tests remain the regression gate, but they are no longer the only evidence for the production architecture.
 
 ## Repository layout
 
 ```text
-webmcp-bridge/
-├── extension/
-│   ├── deepseek/
-│   ├── mcp/
-│   └── tool-loop/
-├── gateway/
-│   ├── secret-scanner/
-│   ├── path-policy/
-│   └── tool-policy/
+webmcp-bridge-plus/
+├── native/
+│   ├── src/       # in-container MCP server + five-tool execution
+│   ├── host/      # minimal host relay + response Secret Firewall
+│   └── deploy/    # image/config/container/source gates
+├── gateway/       # protocol-independent path/secret policy modules
+├── extension/     # separate/frozen Web AI provider subsystem
+├── adapter/       # retired DevSpace migration implementation; cleanup subject to reference review
 ├── docs/
-│   ├── architecture.md
-│   └── threat-model.md
 ├── scripts/
-├── tests/
-├── CONTEXT.md
-├── README.md
-├── SECURITY.md
-├── .gitignore
-└── package.json
+└── tests/
 ```
 
 ## Development
 
-Requires Node.js 22 or newer. The current baseline intentionally has no third-party runtime or development dependencies.
+Requires Node.js 22 or newer. The current baseline intentionally has no third-party Node runtime or development dependencies.
 
 ```bash
 npm test
@@ -91,54 +108,58 @@ npm run build
 npm run check
 ```
 
-`npm run build` validates the extension source and creates a clean `dist/extension` package from tracked extension files. Generated output is ignored by Git.
+`npm run build` validates the extension package and Native source package. `dist/native/manifest.json` records the Native runtime/host/deploy source groups and digests; generated output is ignored by Git.
 
-## Private DevSpace tunnel
-
-The production-safe DevSpace path uses OpenAI Secure MCP Tunnel with a stdio
-adapter. There is no public inbound endpoint and no local adapter TCP port:
-
-```text
-ChatGPT → OpenAI tunnel → tunnel-client → stdio adapter → 127.0.0.1:7676 DevSpace
-```
-
-Install or repair the managed runtime with:
+Base macOS onboarding is now exposed through one Native lifecycle surface:
 
 ```bash
-./adapter/deploy/install-launchd.sh
+npm run webmcp -- install --root "$HOME/Projects" --tunnel-id 'tunnel_<id>'
+npm run webmcp -- status
+npm run webmcp -- doctor
+npm run webmcp -- reconfigure --root "$HOME/Code"
+npm run webmcp -- uninstall
 ```
 
-The installer uses `tunnel-client runtimes connect` to generate and preflight the
-current profile, then installs `tunnel-client run` as a per-user LaunchAgent.
-`tunnel-client` owns the complete tunnel process and spawns the adapter over
-stdio. See [`docs/private-tunnel-adapter.md`](./docs/private-tunnel-adapter.md).
+The installer reuses the existing reviewed Native image, workspace probe/configuration, container controller, immutable host-runtime promotion and `tunnel-client` mechanisms; it does not add another daemon or runtime architecture. Secure MCP Tunnel creation/credential acquisition and the final ChatGPT App connection remain explicit owner actions. See [`docs/installation.md`](./docs/installation.md).
 
-For Phase B container lifecycle recovery, the repository also provides a separate
-macOS LaunchAgent installer:
+V1.1 adds local owner-approved temporary elevated access. A tiny optional native macOS Menu Bar controller provides Full Working Access (the current user's home directory), narrower folder selection, 30-minute / 1-hour / custom duration selection, a visible countdown, and one-click revoke while still delegating all authority to the immutable host installer:
 
 ```bash
-bash ./adapter/deploy/install-devspace-recovery-launchd.sh
-bash ./adapter/deploy/install-devspace-recovery-launchd.sh --uninstall
+npm run test:menubar
+open "dist/WebMCP Menu.app"
 ```
 
-The recovery LaunchAgent directly invokes the host-only `dsup.sh --ensure`; it
-does not execute repository code. This is live on the reference macOS host and
-was verified end-to-end across a real machine reboot on 2026-09-10 (the
-recovery LaunchAgent rebuilt the DevSpace container automatically after login,
-with no manual intervention). See
-[`docs/troubleshooting.md`](./docs/troubleshooting.md) §19 for the related
-stale-OAuth-after-container-replacement fix and its verification evidence.
+Low-level `native:*` commands remain available for release engineering and focused diagnostics, but normal onboarding should not require users to manage image IDs, workspace probes, container policy digests, runtime profiles or LaunchAgent internals directly.
 
-## Current milestone
+## Documentation
 
-This repository currently establishes the security/repository baseline and the first Secret Firewall implementation. The DeepSeek Web adapter, remote MCP transport, and integrated tool loop remain deliberately separated behind module boundaries so they can be implemented next without weakening the security boundary.
+Current Native documents:
 
-## Upstream references
+- [`docs/architecture.md`](./docs/architecture.md) — production Native architecture and trust boundaries;
+- [`docs/installation.md`](./docs/installation.md) — macOS install/status/doctor/reconfigure/uninstall and owner-required UI actions;
+- [`docs/native-tool-contract.md`](./docs/native-tool-contract.md) — five-tool MCP behavior;
+- [`docs/usage.md`](./docs/usage.md) — normal `@WebMCP` workflow;
+- [`docs/development-roadmap.md`](./docs/development-roadmap.md) — active Plus roadmap, inherited Native baseline, multi-host phases, and durable-session direction;
+- [`docs/threat-model.md`](./docs/threat-model.md) — security threats and mitigations;
+- [`docs/release-review-policy.md`](./docs/release-review-policy.md) — independent release-review rules.
 
-DeepSeek++ and DevSpace may be studied to understand behavior or protocol compatibility, but WebMCP Bridge remains a clean independent implementation:
+Historical migration material:
 
-- no fork;
-- no automatic upstream merges;
-- no wholesale subsystem copying;
-- no DeepSeek++ runtime dependency;
-- DevSpace is consumed through MCP rather than copied into this repository.
+- [`docs/native-cutover-runbook.md`](./docs/native-cutover-runbook.md) — completed Native cutover procedure/evidence model;
+- [`docs/adr/0001-devspace-private-tunnel.md`](./docs/adr/0001-devspace-private-tunnel.md) — historical DevSpace private-tunnel decision;
+- [`docs/private-tunnel-adapter.md`](./docs/private-tunnel-adapter.md) — retired DevSpace tunnel implementation;
+- [`docs/roadmap-v2.2-multi-host-routing.md`](./docs/roadmap-v2.2-multi-host-routing.md) — historical DevSpace-era multi-host design input; useful invariants may be reused, but not its retired runtime architecture.
+
+## Product direction
+
+Plus development starts **before** a second production host becomes urgent. The goal is to build the multi-host foundation deliberately while the stable single-host WebMCP remains available and uncomplicated.
+
+The planned sequence is:
+
+1. establish stable host identity and a data-only host/project registry;
+2. add explicit, fail-closed host routing without filesystem scanning or fallback guessing;
+3. add host health/capability state and clear offline behavior;
+4. add durable agent/session management once host identity and routing are stable;
+5. only then consider higher-level scheduling/orchestration.
+
+The existing five-tool Native execution-host surface remains the default primitive boundary. Plus should prefer coordination above that surface instead of adding new host powers unless a concrete capability requires them.

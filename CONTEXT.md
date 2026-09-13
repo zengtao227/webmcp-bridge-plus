@@ -1,13 +1,15 @@
-# WebMCP Bridge — Project Context
+# WebMCP Bridge Plus — Project Context
+
+Status: Historical bootstrap/MVP context inherited from WebMCP Bridge. Native WebMCP is the execution-host foundation for Plus, the fixed MCP-facing root is `/workspace`, and the former DevSpace runtime is retired. DevSpace references below preserve the original project baseline and must not be treated as current Plus operational guidance. For current Plus behavior and direction, use `README.md`, `docs/architecture.md`, `docs/native-tool-contract.md`, `docs/usage.md`, and `docs/development-roadmap.md`.
 
 ## 1. Project identity
 
-- Product name: **WebMCP Bridge**
-- Repository: `zengtao227/webmcp-bridge`
-- Local macOS path: `/Users/zengtao/Doc/My code/webmcp-bridge`
-- DevSpace path: `/work/My code/webmcp-bridge`
+- Product name: **WebMCP Bridge Plus**
+- Repository: `zengtao227/webmcp-bridge-plus`
+- Local macOS path: `/Users/zengtao/Doc/My code/webmcp-bridge-plus`
+- Historical DevSpace path: `/work/My code/webmcp-bridge-plus`
 - Default branch: `main`
-- This is an **independent clean implementation**. It is not a fork of DeepSeek++ or DevSpace.
+- This is a **separate product line** built from the stable WebMCP Native execution-host baseline. It is not WebMCP v2.0 and is not a fork of DeepSeek++ or DevSpace.
 
 ## 2. Why this project exists
 
@@ -26,9 +28,9 @@ The primary security concern is **not the value of the DeepSeek account itself**
 
 A secret must not become model context merely because an AI agent requested a file, command or tool result.
 
-## 3. MVP — locked scope
+## 3. Original MVP — locked scope (historical)
 
-Version 0.x starts with exactly three core capabilities:
+Version 0.x originally started with exactly three core capabilities:
 
 1. **DeepSeek Web tool loop**
    - Integrate with the authenticated `chat.deepseek.com` web experience.
@@ -242,7 +244,7 @@ Before any meaningful implementation, maintain at least:
 
 Do not commit generated credentials, local tokens, browser session data or DevSpace auth material.
 
-## 11. Current implementation priority
+## 11. Original MVP implementation priority (historical)
 
 Implement in this order unless deliberately changed:
 
@@ -255,7 +257,7 @@ Implement in this order unless deliberately changed:
 7. adversarial/security tests
 8. packaging/install experience
 
-## 12. Definition of a safe first milestone
+## 12. Original definition of a safe first milestone (historical)
 
 The first usable milestone should demonstrate all of the following:
 
