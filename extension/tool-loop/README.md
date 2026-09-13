@@ -13,6 +13,6 @@ provider tool request
   -> provider continuation
 ```
 
-A raw MCP result must never be passed directly to the DeepSeek adapter. The bridge-facing policy entry point currently lives at `gateway/tool-policy/index.js`.
+A raw MCP result must never be passed directly to the DeepSeek adapter. The retired standalone `gateway/tool-policy` wrapper was removed because no production extension path called it; any future integrated execution path must apply the retained path policy and Secret Firewall at the actual call boundary rather than through an unused wrapper.
 
 Future integrated tests should make policy bypass structurally difficult and explicitly fail if an adapter receives an unsanitized result.

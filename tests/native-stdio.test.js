@@ -89,6 +89,33 @@ test('native stdio discards oversized frames through newline and recovers', asyn
   }
 });
 
+test('native stdio drains requests already received before stdin EOF', async () => {
+  const handled = [];
+  const server = {
+    handle: async (payload) => {
+      handled.push(payload.id);
+      if (payload.id === 1) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      return { jsonrpc: '2.0', id: payload.id, result: { ok: true } };
+    },
+  };
+  const harness = createHarness(server);
+  try {
+    const first = harness.next();
+    const second = harness.next();
+    harness.send({ jsonrpc: '2.0', id: 1, method: 'first' });
+    harness.send({ jsonrpc: '2.0', id: 2, method: 'second' });
+    harness.stdin.end();
+
+    assert.equal((await first).id, 1);
+    assert.equal((await second).id, 2);
+    assert.deepEqual(handled, [1, 2]);
+  } finally {
+    await harness.close();
+  }
+});
+
 test('native stdio sends no response for notifications when server returns null', async () => {
   const seen = [];
   const server = { handle: async (payload) => { seen.push(payload.method); return null; } };

@@ -91,9 +91,10 @@ webmcp-bridge-plus/
 │   ├── src/       # in-container MCP server + five-tool execution
 │   ├── host/      # minimal host relay + response Secret Firewall
 │   └── deploy/    # image/config/container/source gates
-├── gateway/       # protocol-independent path/secret policy modules
+├── gateway/       # retained path/secret policy modules used by Native
 ├── extension/     # separate/frozen Web AI provider subsystem
-├── adapter/       # retired DevSpace migration implementation; cleanup subject to reference review
+├── adapter/deploy/deploy-host-runtime.js  # generic immutable host snapshot/source gate reused by Native
+├── plus/          # Plus-only host identity, routing, and OpenSSH E2E logic
 ├── docs/
 ├── scripts/
 └── tests/

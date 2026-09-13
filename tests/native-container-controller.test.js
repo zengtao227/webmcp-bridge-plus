@@ -225,6 +225,7 @@ test('container verifier rejects actual image and unauthorized privilege expansi
       ['privileged mode', (container) => { container.HostConfig.Privileged = true; }],
       ['added capability', (container) => { container.HostConfig.CapAdd = ['SYS_ADMIN']; }],
       ['device access', (container) => { container.HostConfig.Devices = [{ PathOnHost: '/dev/null' }]; }],
+      ['host network mode', (container) => { container.HostConfig.NetworkMode = 'host'; }],
     ];
     for (const [label, mutate] of cases) {
       const docker = dockerHarness();

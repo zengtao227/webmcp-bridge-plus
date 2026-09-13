@@ -168,6 +168,115 @@ test('host relay sanitizes child stderr before writing host logs', async () => {
   }
 });
 
+test('host relay redacts secrets split across stderr chunks', async () => {
+  const harness = createHarness();
+  try {
+    harness.child.stderr.write('API_KEY=');
+    harness.child.stderr.write('FAKE_REVIEW_VALUE\n');
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.doesNotMatch(harness.stderr(), /FAKE_REVIEW_VALUE/);
+    assert.match(harness.stderr(), /REDACTED/);
+  } finally {
+    await harness.handle.close();
+  }
+});
+
+test('host relay drops multiline private keys and resumes after the matching END marker', async () => {
+  const harness = createHarness();
+  try {
+    harness.child.stderr.write([
+      'before',
+      '-----BEGIN PRIVATE KEY-----',
+      'FAKE_PRIVATE_KEY_BODY',
+      '-----END PRIVATE KEY-----',
+      'after',
+      '',
+    ].join('\n'));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(harness.stderr(), 'before\n[REDACTED:PRIVATE_KEY]\nafter\n');
+  } finally {
+    await harness.handle.close();
+  }
+});
+
+test('host relay never flushes an unterminated private-key block as raw stderr', async () => {
+  const harness = createHarness();
+  try {
+    harness.child.stderr.write('-----BEGIN PRIVATE KEY-----\nFAKE_UNTERMINATED_BODY');
+    harness.child.stderr.end();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(harness.stderr(), '[REDACTED:PRIVATE_KEY]\n');
+  } finally {
+    await harness.handle.close();
+  }
+});
+
+test('host relay limits complete and split oversized stderr records and then recovers', async () => {
+  for (const chunks of [
+    [`${'x'.repeat(65_537)}\nnormal\n`],
+    ['x'.repeat(65_536), 'x\nnormal\n'],
+  ]) {
+    const harness = createHarness();
+    try {
+      for (const chunk of chunks) harness.child.stderr.write(chunk);
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(harness.stderr(), '[REDACTED:HOST_LOG_RECORD_TOO_LARGE]\nnormal\n');
+    } finally {
+      await harness.handle.close();
+    }
+  }
+});
+
+test('oversized stderr preserves private-key state regardless of marker position or chunking', async () => {
+  const payloads = [
+    `${'x'.repeat(65_537)}-----BEGIN PRIVATE KEY-----\nFAKE_REVIEW_BODY\n-----END PRIVATE KEY-----\nafter\n`,
+    `${'x'.repeat(65_500)}-----BEGIN PRIVATE KEY-----${'y'.repeat(80)}\nFAKE_REVIEW_BODY\n-----END PRIVATE KEY-----\nafter\n`,
+    `${'x'.repeat(65_525)}-----BEGIN PRIVATE KEY-----\nFAKE_REVIEW_BODY\n-----END PRIVATE KEY-----\nafter\n`,
+  ];
+
+  for (const payload of payloads) {
+    for (const chunkSize of [payload.length, 65_536, 997, 17]) {
+      const harness = createHarness();
+      try {
+        for (let offset = 0; offset < payload.length; offset += chunkSize) {
+          harness.child.stderr.write(payload.slice(offset, offset + chunkSize));
+        }
+        await new Promise((resolve) => setImmediate(resolve));
+        assert.equal(
+          harness.stderr(),
+          '[REDACTED:HOST_LOG_RECORD_TOO_LARGE]\nafter\n',
+          `chunkSize=${chunkSize}`,
+        );
+      } finally {
+        await harness.handle.close();
+      }
+    }
+  }
+});
+
+test('oversized stderr recovers when BEGIN and END are both inside the discarded record', async () => {
+  const harness = createHarness();
+  try {
+    harness.child.stderr.write(`${'x'.repeat(65_537)}-----BEGIN PRIVATE KEY-----FAKE_BODY-----END PRIVATE KEY-----\nafter\n`);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(harness.stderr(), '[REDACTED:HOST_LOG_RECORD_TOO_LARGE]\nafter\n');
+  } finally {
+    await harness.handle.close();
+  }
+});
+
+test('oversized stderr with an unterminated private key remains fail closed through EOF', async () => {
+  const harness = createHarness();
+  try {
+    harness.child.stderr.write(`${'x'.repeat(65_537)}-----BEGIN PRIVATE KEY-----\nFAKE_UNTERMINATED_AFTER_OVERSIZE`);
+    harness.child.stderr.end();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(harness.stderr(), '[REDACTED:HOST_LOG_RECORD_TOO_LARGE]\n');
+  } finally {
+    await harness.handle.close();
+  }
+});
+
 test('host relay fails process-level on malformed or oversized container output', async () => {
   const malformed = createHarness();
   try {

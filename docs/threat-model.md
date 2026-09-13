@@ -158,9 +158,9 @@ No provider adapter or transport may bypass that boundary. The DeepSeek/Chrome-e
 
 **Mitigations:**
 
-- one bridge-facing `tool-policy` entry point;
-- adapters receive sanitized results only;
-- integrated tests should assert that forwarding raw results is structurally impossible;
+- the Native host relay independently sanitizes every JSON-RPC result before it leaves the host boundary;
+- the retained `path-policy` protects structured file access inside the Native runtime;
+- provider integration must not bypass the host Secret Firewall or forward raw Native results directly to page code;
 - avoid exporting lower-level transport results directly to page code.
 
 ### T10 — Secret leakage through logs/diagnostics
@@ -270,6 +270,26 @@ No provider adapter or transport may bypass that boundary. The DeepSeek/Chrome-e
 - if an old elevated container cannot be identified safely, cleanup fails closed instead of deleting/reusing ambiguous state; if normal restoration fails, the tunnel/service remains stopped.
 
 **Residual risk:** During an intentionally active lease, the model can modify any non-carved-out file beneath the owner-selected elevated root, including files the owner may later execute. v1.1 also does not bind an active lease to one browser session; local-only grant prevents remote renewal, not use of an already-active tunnel session.
+
+### T18 — Managed-network exfiltration on a Plus execution host
+
+**Scenario:** A future execution host combines Full Working Access with a convenience feature described as "download-only" or "read-only" internet access. Even without POST bodies or file uploads, model-controlled DNS names, destination hosts, URL paths, query parameters, headers, redirects, and connection metadata can encode sensitive local data. In Plus, a second failure mode would be allowing the central control plane to turn that network feature into cross-host authority.
+
+**Required mitigations before such a capability may ship:**
+
+- keep unrestricted Native-container networking disabled during broad filesystem access;
+- place external retrieval behind a separately authenticated/policy-enforced host-side fetch/proxy broker;
+- keep the broker local to the selected execution host and do not let the Plus Control Plane read that host's filesystem, cookies, credentials, or raw network sockets;
+- use destination/protocol allowlists and fail closed for unknown/redirected destinations;
+- prefer bounded `GET`/`HEAD`; arbitrary request bodies, uploads, cookies, ambient credentials, arbitrary headers, and general sockets remain disabled by default;
+- validate outbound hostname/URL/query/header metadata so local content cannot be encoded into the request destination;
+- keep broker request/response sizes, redirect depth, content types, rates, and timeouts bounded;
+- require explicit local owner approval for destinations outside the pre-approved policy;
+- treat fetched content as untrusted input and preserve normal content/Secret Firewall boundaries;
+- scope network capability to one stable `hostId`; host A's managed-network authorization must never imply authority on host B;
+- never use host offline/denied-network state as a reason to fallback to another host.
+
+**Security statement:** MCP routing does not make HTTP "one-way". Managed Network is constrained egress, owned by the selected execution host, and must remain independent from Plus routing authority.
 
 ### T19 — Plus SSH route binding targets the wrong host or widens remote command authority
 

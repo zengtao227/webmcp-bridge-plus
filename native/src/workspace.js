@@ -123,6 +123,7 @@ export function createWorkspaceRuntime({
   maxCommandBytes = DEFAULT_MAX_COMMAND_BYTES,
   maxTimeoutMs = DEFAULT_MAX_TIMEOUT_MS,
   spawnImpl = spawn,
+  realpathImpl = realpath,
   runtimeToken = randomBytes(18).toString('base64url'),
 } = {}) {
   if (!path.isAbsolute(root)) {
@@ -133,7 +134,7 @@ export function createWorkspaceRuntime({
 
   async function canonicalRoot() {
     if (!canonicalRootPromise) {
-      canonicalRootPromise = realpath(root).catch((error) => {
+      canonicalRootPromise = realpathImpl(root).catch((error) => {
         canonicalRootPromise = null;
         throw new NativeWorkspaceError('Workspace root is unavailable.', 'workspace_unavailable', { cause: error?.code });
       });
@@ -144,6 +145,14 @@ export function createWorkspaceRuntime({
   function assertWorkspaceId(candidate) {
     if (candidate !== workspaceId) {
       throw new NativeWorkspaceError('Workspace id is stale or invalid.', 'invalid_workspace_id');
+    }
+  }
+
+  function assertWorkspacePathAllowed(policyPath) {
+    try {
+      assertPathAllowed(policyPath || '.');
+    } catch (error) {
+      throw new NativeWorkspaceError('Path denied by workspace policy.', error?.code ?? 'path_denied');
     }
   }
 
@@ -171,11 +180,7 @@ export function createWorkspaceRuntime({
       throw new NativeWorkspaceError('A file path is required.', 'invalid_path');
     }
 
-    try {
-      assertPathAllowed(policyPath || '.');
-    } catch (error) {
-      throw new NativeWorkspaceError('Path denied by workspace policy.', error?.code ?? 'path_denied');
-    }
+    assertWorkspacePathAllowed(policyPath);
 
     return { rootReal, lexical, relative: path.relative(rootReal, lexical) || '.' };
   }
@@ -184,13 +189,14 @@ export function createWorkspaceRuntime({
     const resolved = await resolveLexical(requestedPath, options);
     let actual;
     try {
-      actual = await realpath(resolved.lexical);
+      actual = await realpathImpl(resolved.lexical);
     } catch (error) {
       throw new NativeWorkspaceError('Path does not exist.', 'path_not_found', { cause: error?.code });
     }
     if (!within(resolved.rootReal, actual)) {
       throw new NativeWorkspaceError('Resolved path escapes the workspace.', 'path_escape');
     }
+    assertWorkspacePathAllowed(path.relative(resolved.rootReal, actual));
     return { ...resolved, actual };
   }
 
@@ -230,18 +236,20 @@ export function createWorkspaceRuntime({
     const parent = path.dirname(resolved.lexical);
     let parentReal;
     try {
-      parentReal = await realpath(parent);
+      parentReal = await realpathImpl(parent);
     } catch (error) {
       throw new NativeWorkspaceError('Parent directory does not exist.', 'parent_not_found', { cause: error?.code });
     }
     if (!within(resolved.rootReal, parentReal)) {
       throw new NativeWorkspaceError('Parent directory escapes the workspace.', 'path_escape');
     }
+    const canonicalDestination = path.join(parentReal, path.basename(resolved.lexical));
+    assertWorkspacePathAllowed(path.relative(resolved.rootReal, canonicalDestination));
 
     let handle;
     try {
       handle = await open(
-        resolved.lexical,
+        canonicalDestination,
         fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW,
         0o644,
       );

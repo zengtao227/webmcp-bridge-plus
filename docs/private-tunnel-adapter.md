@@ -1,6 +1,6 @@
 # 私有 MCP 适配器（DevSpace over OpenAI Secure MCP Tunnel）
 
-Status: Historical/retired DevSpace migration implementation. Native WebMCP is the current production runtime. The deployment and recovery commands below are preserved for historical evidence and legacy-code maintenance only; do not use them as current production instructions.
+Status: Historical/retired DevSpace migration implementation. Native WebMCP is the current production runtime. The executable DevSpace adapter/install/recovery/profile source referenced below has now been removed from the repository. The paths and commands are preserved only as historical evidence; they are not runnable current instructions.
 
 ## 要解决的问题
 

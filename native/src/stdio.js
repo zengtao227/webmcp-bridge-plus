@@ -106,9 +106,6 @@ export function createNativeStdioServer(server, {
   return {
     start() {
       stdin.on('data', onData);
-      stdin.on('end', () => {
-        closed = true;
-      });
       log('webmcp_native_stdio_ready');
       return {
         close: async () => {

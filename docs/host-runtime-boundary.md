@@ -1,6 +1,6 @@
 # Tunnel host-runtime boundary
 
-Status: Historical DevSpace Phase A design. This host-runtime snapshot boundary was part of the retired DevSpace migration path and is preserved as security/design history; Native WebMCP is the current production runtime.
+Status: Historical DevSpace Phase A design. The DevSpace runtime payload referenced below has been removed; this document is preserved only as security/design history. Native WebMCP is the current production runtime, while the generic immutable snapshot mechanism remains in active use.
 
 ## Security invariant
 

@@ -110,6 +110,51 @@ test('path policy rejects traversal and sensitive credential paths before file a
   }
 });
 
+test('path policy is re-applied to canonical in-workspace symlink targets', async () => {
+  await withRuntime(async ({ root, runtime, workspaceId }) => {
+    await writeFile(path.join(root, '.env'), 'SECRET=hidden', 'utf8');
+    await symlink(path.join(root, '.env'), path.join(root, 'ordinary.txt'));
+    await expectCode(runtime.read({ workspaceId, path: 'ordinary.txt' }), 'blocked_sensitive_filename');
+
+    await mkdir(path.join(root, '.ssh'));
+    await symlink(path.join(root, '.ssh'), path.join(root, 'ordinary-dir'), 'dir');
+    await expectCode(
+      runtime.write({ workspaceId, path: 'ordinary-dir/config', content: 'blocked' }),
+      'blocked_sensitive_directory',
+    );
+  });
+});
+
+test('write uses the validated canonical parent if the lexical directory alias is replaced', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'webmcp-native-write-race-'));
+  try {
+    const safeDir = path.join(root, 'safe');
+    const sensitiveDir = path.join(root, '.ssh');
+    const alias = path.join(root, 'alias');
+    await mkdir(safeDir);
+    await mkdir(sensitiveDir);
+    await symlink(safeDir, alias, 'dir');
+
+    let aliasReplaced = false;
+    const realpathImpl = async (candidate) => {
+      const actual = await realpath(candidate);
+      if (!aliasReplaced && path.resolve(candidate) === alias) {
+        aliasReplaced = true;
+        await rm(alias, { force: true });
+        await symlink(sensitiveDir, alias, 'dir');
+      }
+      return actual;
+    };
+    const runtime = createWorkspaceRuntime({ root, runtimeToken: 'race', realpathImpl });
+
+    await runtime.write({ workspaceId: runtime.workspaceId, path: 'alias/config', content: 'safe' });
+    assert.equal(await readFile(path.join(safeDir, 'config'), 'utf8'), 'safe');
+    await assert.rejects(readFile(path.join(sensitiveDir, 'config'), 'utf8'), { code: 'ENOENT' });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('symlinks cannot make read/write silently follow an out-of-workspace target', async () => {
   const outside = await mkdtemp(path.join(os.tmpdir(), 'webmcp-native-symlink-outside-'));
   try {

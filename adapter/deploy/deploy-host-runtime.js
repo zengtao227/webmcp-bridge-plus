@@ -2,7 +2,6 @@
 
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { realpathSync } from 'node:fs';
 import {
   lstat,
   mkdir,
@@ -15,38 +14,13 @@ import {
   symlink,
   writeFile,
 } from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 
-export const HOST_RUNTIME_PAYLOAD = Object.freeze([
-  'package.json',
-  'adapter/bin/start.js',
-  'adapter/src/bounded.js',
-  'adapter/src/config.js',
-  'adapter/src/core.js',
-  'adapter/src/errors.js',
-  'adapter/src/firewall.js',
-  'adapter/src/oauth-client.js',
-  'adapter/src/project-registry.js',
-  'adapter/src/redact.js',
-  'adapter/src/sanitize.js',
-  'adapter/src/secrets.js',
-  'adapter/src/server.js',
-  'adapter/src/stdio.js',
-  'gateway/path-policy/index.js',
-  'gateway/secret-scanner/index.js',
-  'gateway/tool-policy/index.js',
-  'config/devspace-projects.yaml',
-]);
-
-const ENTRYPOINT = 'adapter/bin/start.js';
 const MANIFEST_NAME = 'manifest.json';
 const MANIFEST_SCHEMA_VERSION = 1;
-const DEFAULT_WRITABLE_ROOT = path.join(os.homedir(), 'Doc', 'My code');
 
 export class HostRuntimeError extends Error {
   constructor(message, code, options = {}) {
@@ -64,9 +38,18 @@ function sha256(buffer) {
   return createHash('sha256').update(buffer).digest('hex');
 }
 
-function normalizePayloadPaths(payloadPaths, entrypoint = ENTRYPOINT) {
+function normalizePayloadPaths(payloadPaths, entrypoint) {
   if (!Array.isArray(payloadPaths) || payloadPaths.length === 0) {
     fail('Host runtime payload must contain at least one file.', 'INVALID_PAYLOAD');
+  }
+  if (
+    typeof entrypoint !== 'string'
+    || entrypoint.length === 0
+    || path.isAbsolute(entrypoint)
+    || entrypoint.includes('\0')
+    || entrypoint.split(/[\\/]/).includes('..')
+  ) {
+    fail('Host runtime entrypoint must be a safe relative payload path.', 'INVALID_PAYLOAD');
   }
   const normalized = [...new Set(payloadPaths)].sort();
   if (normalized.length !== payloadPaths.length) {
@@ -120,7 +103,7 @@ async function runGitBuffer(sourceRoot, args) {
   }
 }
 
-function outputMode(relativePath, entrypoint = ENTRYPOINT) {
+function outputMode(relativePath, entrypoint) {
   return relativePath === entrypoint ? 0o700 : 0o600;
 }
 
@@ -209,8 +192,8 @@ async function ensureHostOnlyRoot({
 
 export async function inspectSource({
   sourceRoot,
-  payloadPaths = HOST_RUNTIME_PAYLOAD,
-  entrypoint = ENTRYPOINT,
+  payloadPaths,
+  entrypoint,
 }) {
   const normalizedPayload = normalizePayloadPaths(payloadPaths, entrypoint);
   const sourceAbsolute = path.resolve(sourceRoot);
@@ -283,13 +266,9 @@ export async function inspectSource({
     // Defense in depth: reject literal absolute backreferences to either the
     // lexical checkout path or its canonical realpath. This catches filesystem
     // aliases such as macOS /var/... -> /private/var/..., but does not claim to
-    // recognize every dynamically constructed path. The canonical project
-    // registry is data, not host code, and intentionally contains DevSpace-side
-    // `/work/...` workspace paths; in sandboxed tests that path can equal
-    // sourceRoot, so exempt that one data file.
+    // recognize every dynamically constructed path.
     const repositoryBackreferences = [...new Set([sourceAbsolute, sourceReal])];
-    if (relativePath !== 'config/devspace-projects.yaml'
-      && repositoryBackreferences.some((candidate) => headBytes.includes(Buffer.from(candidate, 'utf8')))) {
+    if (repositoryBackreferences.some((candidate) => headBytes.includes(Buffer.from(candidate, 'utf8')))) {
       fail(`Runtime payload contains an absolute backreference to the writable repository: ${relativePath}`, 'REPOSITORY_BACKREFERENCE');
     }
 
@@ -338,7 +317,7 @@ async function listReleaseFiles(root, current = '') {
 export async function verifyRelease(releaseDir, {
   expectedArtifactId = null,
   expectedPayloadSha256 = null,
-  entrypoint = ENTRYPOINT,
+  entrypoint,
 } = {}) {
   const releaseStat = await lstat(releaseDir);
   if (!releaseStat.isDirectory() || releaseStat.isSymbolicLink()) {
@@ -426,7 +405,7 @@ export async function verifyRelease(releaseDir, {
   return Object.freeze({ manifest, entrypoint: verifiedEntrypoint });
 }
 
-export async function verifyCurrent(runtimeRoot, { entrypoint = ENTRYPOINT } = {}) {
+export async function verifyCurrent(runtimeRoot, { entrypoint } = {}) {
   const rootReal = await realpath(runtimeRoot);
   const currentPath = path.join(rootReal, 'current');
   let currentStat;
@@ -462,9 +441,9 @@ export async function deployHostRuntime({
   runtimeRoot,
   projectRoot = null,
   writableRoots = [],
-  defaultWritableRoot = DEFAULT_WRITABLE_ROOT,
-  payloadPaths = HOST_RUNTIME_PAYLOAD,
-  entrypoint = ENTRYPOINT,
+  defaultWritableRoot,
+  payloadPaths,
+  entrypoint,
   now = () => new Date(),
   id = () => randomUUID(),
   writePayloadFile = defaultWritePayloadFile,
@@ -597,76 +576,4 @@ export async function deployHostRuntime({
       await rm(staging, { recursive: true, force: true });
     }
   }
-}
-
-function parseArgs(argv) {
-  const options = {};
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === '--verify-current') {
-      options.verifyCurrentOnly = true;
-      continue;
-    }
-    const value = argv[index + 1];
-    if (!value || value.startsWith('--')) {
-      fail(`Missing value for ${arg}`, 'INVALID_CLI_ARGUMENT');
-    }
-    if (arg === '--source-root') options.sourceRoot = value;
-    else if (arg === '--runtime-root') options.runtimeRoot = value;
-    else if (arg === '--project-root') {
-      options.projectRoots ??= [];
-      options.projectRoots.push(value);
-    }
-    else fail(`Unknown argument: ${arg}`, 'INVALID_CLI_ARGUMENT');
-    index += 1;
-  }
-  return options;
-}
-
-async function main() {
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  const repo = path.resolve(here, '../..');
-  const args = parseArgs(process.argv.slice(2));
-  const runtimeRoot = path.resolve(
-    args.runtimeRoot
-      ?? process.env.WEBMCP_HOST_RUNTIME_ROOT
-      ?? path.join(os.homedir(), 'Doc', 'devspace-container', 'runtime', 'webmcp-adapter'),
-  );
-  if (args.verifyCurrentOnly) {
-    const current = await verifyCurrent(runtimeRoot);
-    if (!current) fail('Host runtime current pointer is not deployed.', 'CURRENT_NOT_DEPLOYED');
-    process.stdout.write(`${JSON.stringify(current)}\n`);
-    return;
-  }
-  const result = await deployHostRuntime({
-    sourceRoot: path.resolve(args.sourceRoot ?? repo),
-    runtimeRoot,
-    defaultWritableRoot: DEFAULT_WRITABLE_ROOT,
-    writableRoots: (args.projectRoots ?? (process.env.DEVSPACE_PROJECT_ROOT
-      ? [process.env.DEVSPACE_PROJECT_ROOT]
-      : [])).map((root) => path.resolve(root)),
-  });
-  process.stdout.write(`${JSON.stringify(result)}\n`);
-}
-
-function canonicalModuleUrl(candidate) {
-  if (!candidate) return null;
-  try {
-    return pathToFileURL(realpathSync(path.resolve(candidate))).href;
-  } catch {
-    return pathToFileURL(path.resolve(candidate)).href;
-  }
-}
-
-// macOS exposes some paths through aliases such as /var -> /private/var. Compare
-// canonical paths so invoking the CLI through either spelling cannot silently
-// skip main() while still exiting successfully.
-const invokedPath = canonicalModuleUrl(process.argv[1]);
-const modulePath = canonicalModuleUrl(fileURLToPath(import.meta.url));
-if (invokedPath === modulePath) {
-  main().catch((error) => {
-    const code = error instanceof HostRuntimeError ? error.code : 'UNEXPECTED_HOST_RUNTIME_ERROR';
-    process.stderr.write(`host runtime deployment failed [${code}]: ${error.message}\n`);
-    process.exitCode = 1;
-  });
 }

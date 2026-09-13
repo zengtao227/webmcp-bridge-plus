@@ -121,11 +121,12 @@ export function verifyContainer(container, expected) {
   if (!Array.isArray(securityOpt) || !securityOpt.some((value) => String(value).startsWith('no-new-privileges'))) {
     fail('Existing Native container is missing no-new-privileges.', 'CONTAINER_HARDENING_MISMATCH');
   }
-  if (expected.networkEnabled === false && container?.HostConfig?.NetworkMode !== 'none') {
+  const networkMode = container?.HostConfig?.NetworkMode;
+  if (expected.networkEnabled === false && networkMode !== 'none') {
     fail('Existing Native container network policy does not match the reviewed configuration.', 'CONTAINER_NETWORK_MISMATCH');
   }
-  if (expected.networkEnabled === true && container?.HostConfig?.NetworkMode === 'none') {
-    fail('Existing Native container unexpectedly has networking disabled.', 'CONTAINER_NETWORK_MISMATCH');
+  if (expected.networkEnabled === true && !['default', 'bridge'].includes(networkMode)) {
+    fail('Existing Native container network policy does not match the reviewed configuration.', 'CONTAINER_NETWORK_MISMATCH');
   }
   const mounts = Array.isArray(container?.Mounts) ? container.Mounts : [];
   const workspaceMount = mounts.find((mount) => mount?.Destination === '/workspace');

@@ -1,6 +1,6 @@
 # DevSpace / Secure MCP Tunnel 排障与踩坑记录
 
-Status: Historical DevSpace migration troubleshooting. Native WebMCP is the current production runtime; DevSpace recovery/OAuth/runtime checks in this document are retained only for migration history and legacy-code investigation, not for current production operations.
+Status: Historical DevSpace migration troubleshooting. Native WebMCP is the current production runtime; the DevSpace adapter/install/recovery implementation referenced here has been removed. Commands and paths below are retained only as migration evidence and are not current production operations.
 
 这份文档记录迁移期间已经踩过的坑、已知限制和当时的排查顺序。目标是保留可复用的故障证据，避免把退役 DevSpace 路径误认为当前 Native production 操作手册。
 

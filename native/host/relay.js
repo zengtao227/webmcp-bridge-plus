@@ -2,6 +2,9 @@ import { spawn } from 'node:child_process';
 import { sanitizeJsonRpcEnvelope, sanitizeLogText } from './firewall.js';
 
 const DEFAULT_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+const MAX_LOG_RECORD_BYTES = 64 * 1024;
+const PRIVATE_KEY_MARKER = /-----(BEGIN|END) ((?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY)-----/gi;
+const PRIVATE_KEY_MARKER_TAIL_BYTES = 64;
 const DEFAULT_CONTAINER = 'webmcp-native';
 const DEFAULT_ENTRYPOINT = '/opt/webmcp/native/bin/start.js';
 
@@ -41,6 +44,12 @@ export function createHostRelay({
 
   let child = null;
   let buffer = Buffer.alloc(0);
+  let stderrBuffer = Buffer.alloc(0);
+  let stderrMarkerTail = '';
+  let stderrOversized = false;
+  let privateKeyLabel = null;
+  let stderrRecordPrivate = false;
+  let stderrRecordPrivateBegin = false;
   let closed = false;
   let failed = false;
   let stdinEnded = false;
@@ -109,14 +118,91 @@ export function createHostRelay({
     }
   }
 
+  function scanPrivateKeyMarkers(segment) {
+    const probe = `${stderrMarkerTail}${segment.toString('utf8')}`;
+    PRIVATE_KEY_MARKER.lastIndex = 0;
+    for (let match = PRIVATE_KEY_MARKER.exec(probe); match; match = PRIVATE_KEY_MARKER.exec(probe)) {
+      const kind = match[1].toUpperCase();
+      const label = match[2].toUpperCase();
+      if (kind === 'BEGIN' && privateKeyLabel === null) {
+        privateKeyLabel = label;
+        stderrRecordPrivate = true;
+        stderrRecordPrivateBegin = true;
+      } else if (kind === 'END' && privateKeyLabel === label) {
+        stderrRecordPrivate = true;
+        privateKeyLabel = null;
+      }
+    }
+    stderrMarkerTail = probe.slice(-PRIVATE_KEY_MARKER_TAIL_BYTES);
+  }
+
+  function finishStderrRecord({ newline = true } = {}) {
+    if (stderrOversized) {
+      stderr.write(`[REDACTED:HOST_LOG_RECORD_TOO_LARGE]${newline ? '\n' : ''}`);
+    } else if (stderrRecordPrivate) {
+      if (stderrRecordPrivateBegin) {
+        stderr.write(`[REDACTED:PRIVATE_KEY]${newline ? '\n' : ''}`);
+      }
+    } else if (stderrBuffer.byteLength > 0) {
+      try {
+        stderr.write(sanitizeLogText(stderrBuffer.toString('utf8')));
+        if (newline) stderr.write('\n');
+      } catch {
+        stderr.write('[REDACTED:HOST_FIREWALL_LOG_FAILURE]\n');
+      }
+    } else if (newline) {
+      stderr.write('\n');
+    }
+
+    stderrBuffer = Buffer.alloc(0);
+    stderrMarkerTail = '';
+    stderrOversized = false;
+    stderrRecordPrivate = privateKeyLabel !== null;
+    stderrRecordPrivateBegin = false;
+  }
+
   function onChildStderr(chunk) {
     if (closed) {
       return;
     }
-    try {
-      stderr.write(sanitizeLogText(chunk.toString('utf8')));
-    } catch {
-      stderr.write('[REDACTED:HOST_FIREWALL_LOG_FAILURE]\n');
+    const piece = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, 'utf8');
+    let offset = 0;
+
+    while (offset < piece.byteLength) {
+      const newline = piece.indexOf(0x0a, offset);
+      const end = newline === -1 ? piece.byteLength : newline;
+      const segment = piece.subarray(offset, end);
+
+      if (privateKeyLabel !== null) {
+        stderrRecordPrivate = true;
+      }
+      scanPrivateKeyMarkers(segment);
+
+      if (!stderrOversized) {
+        if (stderrBuffer.byteLength + segment.byteLength > MAX_LOG_RECORD_BYTES) {
+          stderrBuffer = Buffer.alloc(0);
+          stderrOversized = true;
+        } else if (segment.byteLength > 0) {
+          stderrBuffer = Buffer.concat([stderrBuffer, segment]);
+        }
+      }
+
+      if (newline === -1) {
+        return;
+      }
+      finishStderrRecord();
+      offset = newline + 1;
+    }
+  }
+
+  function flushChildStderr() {
+    if (
+      stderrOversized
+      || stderrBuffer.byteLength > 0
+      || stderrRecordPrivate
+      || stderrRecordPrivateBegin
+    ) {
+      finishStderrRecord({ newline: false });
     }
   }
 
@@ -148,6 +234,7 @@ export function createHostRelay({
 
       child.stdout.on('data', onChildStdout);
       child.stderr.on('data', onChildStderr);
+      child.stderr.on('end', flushChildStderr);
       child.on('error', () => failClosed('Unable to start the Native runtime container process.'));
       child.on('exit', (code, signal) => {
         if (closed || failed) {

@@ -610,6 +610,48 @@ For each capability below, preserve the current stable low-level WebMCP tool sur
 
 These future directions must remain capability hypotheses with explicit triggers. A roadmap entry is not authorization to implement it, and future designs should reuse/delete/simplify before introducing another state store, controller, daemon, tool, or compatibility layer.
 
+### J. Future shared execution-host capability: Managed Network during Full Working Access
+
+Status: **Planned cross-product execution-host capability; not part of the current Plus multi-host phase and not yet authorized for implementation.**
+
+Plus must preserve the same security direction recorded in stable `webmcp-bridge`: broad filesystem authority and network authority are separate capabilities. The current/default elevated mode remains **Full Working Access + container Network OFF**.
+
+Future target:
+
+```text
+Plus Control Plane
+      ↓ selects host only
+Execution Host
+      ├── Full Working Access — Offline (default)
+      │     broad local filesystem lease + container Network OFF
+      │
+      └── Full Working Access — Managed Network (optional/future)
+            broad local filesystem lease
+            container still has no unrestricted internet
+            external retrieval only through a constrained host-side fetch/proxy broker
+```
+
+The capability belongs to each execution host, not to the central Plus Control Plane. Plus may route to a host, but the control plane must not gain that host's filesystem paths, cookies, ambient credentials, arbitrary network socket access, or permission to bypass local owner approval. Any future capability signaling must be justified by an actual routing/runtime consumer rather than pre-built as generic metadata.
+
+Required invariants:
+
+- reuse the same execution-host security contract in stable WebMCP and Plus rather than inventing two incompatible networking models;
+- keep unrestricted Docker/container networking disabled while a broad filesystem lease is active;
+- managed retrieval must use a separately policy-enforced host-side broker with destination/protocol allowlists, bounded `GET`/`HEAD`, bounded redirects/size/timeouts, and no arbitrary upload/request body/cookie/ambient credential by default;
+- ordinary HTTP is not truly receive-only: DNS names, URLs, query strings, headers, redirects, and connection metadata can all become outbound exfiltration channels and therefore require validation;
+- the broker itself must not read `/workspace` or other host files; it receives only the validated request and returns bounded untrusted response content;
+- unfamiliar destinations require explicit local owner approval or fail closed; no silent broadening and no fallback to unrestricted networking;
+- network capability is local-host policy and must not be auto-enabled merely because the Plus router selected that host;
+- future two-host E2E must prove that managed-network permission on host A grants no network/filesystem authority on host B.
+
+Implementation sequencing: keep the current Plus host identity / registry / route foundation minimal. When Managed Network is implemented in the stable execution-host layer, Plus should consume/reuse that host-level capability rather than duplicate it in the control plane.
+
+### K. Shared execution-host code strategy
+
+Status: **Design constraint, not a request to create another repository now.**
+
+Stable WebMCP and Plus currently live in separate repositories, so execution-host improvements do not propagate automatically. For shared capabilities such as Native container policy, Secret Firewall, temporary elevation, and future Managed Network, keep the implementation boundaries reusable and behaviorally aligned. Only extract a shared package/core repository after repeated real maintenance shows that synchronized copies are becoming a source of drift; do not create a third framework pre-emptively.
+
 ## 7. Planning discipline
 
 When a new material development idea is accepted:
