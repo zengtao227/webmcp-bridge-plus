@@ -271,6 +271,22 @@ No provider adapter or transport may bypass that boundary. The DeepSeek/Chrome-e
 
 **Residual risk:** During an intentionally active lease, the model can modify any non-carved-out file beneath the owner-selected elevated root, including files the owner may later execute. v1.1 also does not bind an active lease to one browser session; local-only grant prevents remote renewal, not use of an already-active tunnel session.
 
+### T19 — Plus SSH route binding targets the wrong host or widens remote command authority
+
+**Scenario:** A project route is converted into an SSH connection. If model-controlled host strings/options/remote commands are accepted, host-key checking is weakened, or failure silently falls back to another host, routing metadata could become transport or shell authority.
+
+**Mitigations:**
+
+- Registry returns only a validated stable `hostId`; endpoint/user/key/port data remain in owner-managed OpenSSH configuration;
+- the stable `hostId` is passed directly as the SSH Host alias, with no second Plus endpoint registry;
+- invoke fixed `/usr/bin/ssh` argv with `BatchMode=yes`, `StrictHostKeyChecking=yes`, no password/keyboard-interactive prompting, and forwarding/local-command side effects disabled;
+- the remote command is fixed to the existing immutable/source-gated Native host stdio entrypoint; model/project input cannot supply SSH options or a remote shell command;
+- missing/invalid project and explicit wrong-host requests fail before SSH;
+- SSH host-key/authentication/unavailability/remote-command failure is explicit and never causes fallback;
+- rely on OpenSSH for transport authentication/confidentiality/integrity; do not add a second WebMCP cryptographic handshake without a demonstrated gap.
+
+**Residual trust:** The owner's OpenSSH configuration, known-host state, authentication credentials, VPN/mesh policy, and selected remote Unix account remain owner-controlled transport authority and are outside the Plus Registry.
+
 ## Out of scope for the base product
 
 The base Native product intentionally does not attempt to secure capabilities it does not provide:

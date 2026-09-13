@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -52,8 +52,21 @@ function dockerHarness() {
         return [value.slice(0, separator), value.slice(separator + 1)];
       }));
       const userIndex = args.indexOf('--user');
-      const mount = args.find((arg) => typeof arg === 'string' && arg.includes('dst=/workspace,bind-recursive=disabled'));
-      const source = mount.match(/(?:^|,)src=([^,]+)/)[1];
+      const mountSpecs = args
+        .map((arg, index) => (arg === '--mount' ? args[index + 1] : null))
+        .filter(Boolean);
+      const mounts = mountSpecs.map((spec) => {
+        const fields = Object.fromEntries(spec.split(',').filter((part) => part.includes('=')).map((part) => {
+          const separator = part.indexOf('=');
+          return [part.slice(0, separator), part.slice(separator + 1)];
+        }));
+        return {
+          Type: fields.type,
+          Source: fields.src ?? '',
+          Destination: fields.dst,
+          RW: !spec.split(',').includes('readonly'),
+        };
+      });
       const networkIndex = args.indexOf('--network');
       container = {
         Id: CONTAINER_ID,
@@ -68,7 +81,7 @@ function dockerHarness() {
           NetworkMode: networkIndex === -1 ? 'default' : args[networkIndex + 1],
         },
         State: { Running: true },
-        Mounts: [{ Source: source, Destination: '/workspace', RW: true }],
+        Mounts: mounts,
       };
       return { stdout: 'container-id\n', stderr: '' };
     }
@@ -233,6 +246,53 @@ test('container verifier rejects actual image and unauthorized privilege expansi
         hostGid: 1000,
       }), undefined, label);
     }
+  });
+});
+
+test('container verifier rejects a missing control-plane mask and any extra mount', async () => {
+  await withState(async ({ root, configPath, imagePinPath }) => {
+    const protectedDir = path.join(root, 'control-plane');
+    await mkdir(protectedDir);
+
+    const missingMask = dockerHarness();
+    await ensureNativeContainer({
+      configPath,
+      imagePinPath,
+      protectedPaths: [protectedDir],
+      execFileImpl: missingMask.execFileImpl,
+      platform: 'linux',
+      hostUid: 1000,
+      hostGid: 1000,
+    });
+    missingMask.container.Mounts = missingMask.container.Mounts.filter((mount) => mount.Destination !== '/workspace/control-plane');
+    await assert.rejects(ensureNativeContainer({
+      configPath,
+      imagePinPath,
+      protectedPaths: [protectedDir],
+      execFileImpl: missingMask.execFileImpl,
+      platform: 'linux',
+      hostUid: 1000,
+      hostGid: 1000,
+    }), /control-plane mask/);
+
+    const extraMount = dockerHarness();
+    await ensureNativeContainer({
+      configPath,
+      imagePinPath,
+      execFileImpl: extraMount.execFileImpl,
+      platform: 'linux',
+      hostUid: 1000,
+      hostGid: 1000,
+    });
+    extraMount.container.Mounts.push({ Type: 'bind', Source: '/tmp', Destination: '/unexpected', RW: false });
+    await assert.rejects(ensureNativeContainer({
+      configPath,
+      imagePinPath,
+      execFileImpl: extraMount.execFileImpl,
+      platform: 'linux',
+      hostUid: 1000,
+      hostGid: 1000,
+    }), /unauthorized mount/);
   });
 });
 

@@ -127,33 +127,51 @@ export function verifyContainer(container, expected) {
   if (expected.networkEnabled === true && container?.HostConfig?.NetworkMode === 'none') {
     fail('Existing Native container unexpectedly has networking disabled.', 'CONTAINER_NETWORK_MISMATCH');
   }
-  const workspaceMount = Array.isArray(container?.Mounts)
-    ? container.Mounts.find((mount) => mount?.Destination === '/workspace')
-    : null;
+  const mounts = Array.isArray(container?.Mounts) ? container.Mounts : [];
+  const workspaceMount = mounts.find((mount) => mount?.Destination === '/workspace');
   if (
     !workspaceMount
+    || workspaceMount.Type !== 'bind'
     || path.resolve(workspaceMount.Source ?? '') !== expected.canonicalRoot
     || workspaceMount.RW !== true
   ) {
     fail('Existing Native container workspace mount does not match the selected writable host root.', 'CONTAINER_WORKSPACE_MISMATCH');
   }
 
+  for (const mask of expected.maskPlan) {
+    const mount = mounts.find((candidate) => candidate?.Destination === mask.destination);
+    const valid = mask.type === 'file'
+      ? mount?.Type === 'bind' && path.resolve(mount?.Source ?? '') === '/dev/null' && mount?.RW === false
+      : mount?.Type === 'tmpfs' && mount?.RW === false;
+    if (!valid) {
+      fail('Existing Native container control-plane mask does not match the reviewed configuration.', 'CONTAINER_MASK_MISMATCH');
+    }
+  }
+
   for (const [destination, expectedSource] of [
     [NATIVE_GIT_KEY_PATH, expected.gitCredentialSource],
     [NATIVE_GIT_KNOWN_HOSTS_PATH, expected.gitKnownHostsSource],
   ]) {
-    const mount = Array.isArray(container?.Mounts)
-      ? container.Mounts.find((candidate) => candidate?.Destination === destination)
-      : null;
+    const mount = mounts.find((candidate) => candidate?.Destination === destination);
     if (expectedSource === null) {
       if (mount) {
         fail('Existing Native container exposes an unauthorized Git secret mount.', 'CONTAINER_GIT_MOUNT_MISMATCH');
       }
       continue;
     }
-    if (!mount || path.resolve(mount.Source ?? '') !== expectedSource || mount.RW !== false) {
+    if (mount?.Type !== 'bind' || path.resolve(mount.Source ?? '') !== expectedSource || mount.RW !== false) {
       fail('Existing Native container Git secret mount does not match the reviewed configuration.', 'CONTAINER_GIT_MOUNT_MISMATCH');
     }
+  }
+
+  const allowedDestinations = new Set([
+    '/workspace',
+    ...expected.maskPlan.map((mask) => mask.destination),
+    ...(expected.gitCredentialSource === null ? [] : [NATIVE_GIT_KEY_PATH]),
+    ...(expected.gitKnownHostsSource === null ? [] : [NATIVE_GIT_KNOWN_HOSTS_PATH]),
+  ]);
+  if (mounts.length !== allowedDestinations.size || mounts.some((mount) => !allowedDestinations.has(mount?.Destination))) {
+    fail('Existing Native container has an unauthorized mount.', 'CONTAINER_MOUNT_MISMATCH');
   }
 }
 
@@ -204,6 +222,7 @@ async function resolveNativeContainerPolicy({
     networkEnabled: policy.config.networkEnabled,
     gitCredentialSource: policy.gitCredentialSource,
     gitKnownHostsSource: policy.gitKnownHostsSource,
+    maskPlan: policy.maskPlan,
     elevationLeaseId: policy.elevationLeaseId,
   });
   return Object.freeze({ config, imagePin, policy, expected });

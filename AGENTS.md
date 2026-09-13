@@ -18,6 +18,10 @@ Commit and push capability is not permission to act automatically. If the user d
 
 An independently invoked release reviewer operating outside the WebMCP Plus development path is governed by [`docs/release-review-policy.md`](./docs/release-review-policy.md). When the user explicitly authorizes that independent review to publish on PASS, and all policy conditions are satisfied, the reviewer carries the approved final tree to `main` via whichever mechanism the repository's actual branch protection permits (direct push, or push review branch + PR + required checks + self-merge) — never by bypassing branch protection.
 
+## Engineering minimalism
+
+Use first principles and make the minimum necessary change. Prefer deletion, reuse, and simplification before adding code. If removing a mechanism solves the problem, remove it rather than hardening or generalizing it. Do not add abstractions, compatibility layers, state, daemons, services, configuration, tools, or frameworks for hypothetical future needs. Every new line of production code must justify a current requirement or safety boundary; no code is better than unnecessary code.
+
 ## Safety boundary
 
 Repository Git access does not authorize host operations. Do not install/reload LaunchAgents, restart Docker or the WebMCP runtime, change network exposure, alter host-only control-plane files, or perform live activation unless the user separately and explicitly requests that operation.

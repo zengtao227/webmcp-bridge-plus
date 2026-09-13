@@ -24,13 +24,16 @@ export async function defaultProtectedPaths({
   platform = process.platform,
 } = {}) {
   const configDirectory = path.dirname(configPath);
+  const plusControlDirectory = path.join(home, '.local', 'share', 'webmcp-plus');
   await mkdir(configDirectory, { recursive: true, mode: 0o700 });
+  await mkdir(plusControlDirectory, { recursive: true, mode: 0o700 });
 
   const candidates = [
     configDirectory,
     path.join(home, 'Doc', 'devspace-container'),
     path.join(home, '.config', 'tunnel-client'),
     path.join(home, '.local', 'share', 'webmcp'),
+    plusControlDirectory,
   ];
   if (platform === 'darwin') {
     candidates.push(

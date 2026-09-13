@@ -411,26 +411,27 @@ Plus reuses the production-accepted Native execution-host model: immutable host 
 
 ### F. Plus multi-host foundation
 
-Status: **Active — begin proactively before a second production host becomes urgent.**
+Status: **Active — minimal Phase 1 host identity + exact project registry + fail-closed route decision implemented. The first concrete E2E transport is OpenSSH using stable `hostId` as the owner-managed SSH Host alias. Live host state and capability negotiation remain deferred pending a real consumer.**
 
-The first Plus development target is the multi-host control-plane foundation. It must be built above independent Native WebMCP execution hosts rather than by widening one host into a cross-machine filesystem/shell proxy.
+The first Plus development target is the multi-host routing foundation. It must sit above independent Native WebMCP execution hosts rather than widen one host into a cross-machine filesystem/shell proxy. The minimal Phase 1 contract is documented in [`plus-control-plane.md`](./plus-control-plane.md). [`plus-transport-options.md`](./plus-transport-options.md) records the first direct OpenSSH binding; the transport reuses mature SSH security and the existing immutable Native stdio host entrypoint instead of adding WebMCP cryptography.
 
 Sequence:
 
 1. stable execution-host identity that does not rely on hostname alone;
 2. data-only host/project registry with no secrets or runtime credentials;
-3. explicit fail-closed host/project resolution;
-4. clear host online/offline and capability state;
-5. real two-host E2E validation;
-6. durable agent/session management after routing identity is stable;
-7. higher-level scheduling/orchestration only after the earlier layers prove useful.
+3. explicit fail-closed host/project route decision;
+4. use OpenSSH over the owner's existing mesh/VPN as the first concrete transport, with stable `hostId` passed directly as the SSH Host alias;
+5. reuse OpenSSH peer authentication, confidentiality, integrity, host-key verification and transport replay properties; add no application-layer cryptography because no missing security property is currently demonstrated;
+6. use only the fixed immutable Native host stdio entrypoint and fail explicitly on SSH/remote-command failure, with no fallback;
+7. validate the route on two owner-controlled hosts; add live availability state only if a real runtime consumer requires it;
+8. durable agent/session management and higher-level orchestration only after the earlier layers prove useful.
 
 Core invariants:
 
 - no arbitrary filesystem discovery across hosts;
 - no fallback to another host when the selected host is missing/offline;
 - no host stores another host's local credentials or mounts another host's files;
-- ambiguous project/host identity must ask or fail, never guess;
+- invalid or missing project/host identity must fail, never guess;
 - `workspaceId` and future durable-session identity are always scoped to one execution-host identity;
 - the stable five-tool execution-host primitive surface remains unchanged unless a new primitive is independently justified.
 

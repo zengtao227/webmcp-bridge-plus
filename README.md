@@ -12,6 +12,8 @@ ChatGPT / Web AI
 WebMCP Bridge Plus control plane
       ↓
 explicit host/project routing
+      ↓
+OpenSSH execution-host connection
    ┌──┴───────────────┐
    ↓                  ↓
 execution host A   execution host B
@@ -20,7 +22,7 @@ Docker isolation   Docker isolation
 /workspace         /workspace
 ```
 
-Each execution host keeps its own Secure MCP Tunnel identity, immutable host boundary, isolated Native container, `/workspace` root, Secret Firewall, credentials, and local owner controls. Plus must not collapse multiple hosts into one broad filesystem or credential boundary.
+Each execution host keeps its own Secure MCP Tunnel identity, immutable host boundary, isolated Native container, `/workspace` root, Secret Firewall, credentials, and local owner controls. Plus must not collapse multiple hosts into one broad filesystem or credential boundary. The data-only registry carries routing identity only; the first E2E transport reuses owner-managed OpenSSH configuration with the stable `hostId` as the SSH alias.
 
 The repository has been rebased conceptually onto the current Native/V1.1 WebMCP implementation. The former DevSpace runtime and routing work remains only as historical design input where useful. New Plus implementation must use the Native WebMCP execution-host model rather than revive the retired DevSpace production path.
 
@@ -140,6 +142,8 @@ Current Native documents:
 - [`docs/native-tool-contract.md`](./docs/native-tool-contract.md) — five-tool MCP behavior;
 - [`docs/usage.md`](./docs/usage.md) — normal `@WebMCP` workflow;
 - [`docs/development-roadmap.md`](./docs/development-roadmap.md) — active Plus roadmap, inherited Native baseline, multi-host phases, and durable-session direction;
+- [`docs/plus-control-plane.md`](./docs/plus-control-plane.md) — minimal Phase 1 stable host identity, data-only registry, route decision, and protected control-plane contract;
+- [`docs/plus-transport-options.md`](./docs/plus-transport-options.md) — first concrete OpenSSH E2E transport and its fail-closed boundary;
 - [`docs/threat-model.md`](./docs/threat-model.md) — security threats and mitigations;
 - [`docs/release-review-policy.md`](./docs/release-review-policy.md) — independent release-review rules.
 
@@ -158,8 +162,9 @@ The planned sequence is:
 
 1. establish stable host identity and a data-only host/project registry;
 2. add explicit, fail-closed host routing without filesystem scanning or fallback guessing;
-3. add host health/capability state and clear offline behavior;
-4. add durable agent/session management once host identity and routing are stable;
-5. only then consider higher-level scheduling/orchestration.
+3. use OpenSSH as the first concrete E2E transport, with stable `hostId` reused directly as the owner-managed SSH Host alias and no custom cryptography;
+4. validate the fixed SSH → immutable Native stdio path on two owner-controlled hosts, adding live host state only if an actual runtime consumer requires it;
+5. add durable agent/session management only after identity, routing, and transport are proven;
+6. only then consider higher-level scheduling/orchestration.
 
 The existing five-tool Native execution-host surface remains the default primitive boundary. Plus should prefer coordination above that surface instead of adding new host powers unless a concrete capability requires them.
