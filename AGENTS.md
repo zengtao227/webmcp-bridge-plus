@@ -22,6 +22,17 @@ An independently invoked release reviewer operating outside the WebMCP Plus deve
 
 Use first principles and make the minimum necessary change. Prefer deletion, reuse, and simplification before adding code. If removing a mechanism solves the problem, remove it rather than hardening or generalizing it. Do not add abstractions, compatibility layers, state, daemons, services, configuration, tools, or frameworks for hypothetical future needs. Every new line of production code must justify a current requirement or safety boundary; no code is better than unnecessary code.
 
+## Review scope discipline
+
+When implementing or responding to review findings, keep the change set causally tied to the requested task:
+
+- fix the confirmed issue and add only the regression coverage or documentation needed to prove that fix;
+- treat post-fix self-review as read-only by default: report unrelated findings instead of changing them;
+- expand the implementation only when evidence shows the current fix is incomplete on the same causal chain, or when the owner explicitly approves broader scope;
+- before handoff, every changed path must be attributable to the original task, a confirmed review finding, a directly necessary regression test, or directly necessary documentation. Revert unexplained changes.
+
+Do not use "hardening", cleanup, refactoring, or architectural improvement as a reason to widen a blocker fix without that evidence or owner approval.
+
 ## Safety boundary
 
 Repository Git access does not authorize host operations. Do not install/reload LaunchAgents, restart Docker or the WebMCP runtime, change network exposure, alter host-only control-plane files, or perform live activation unless the user separately and explicitly requests that operation.

@@ -1,7 +1,7 @@
 # Independent Review and Release Policy
 
 Status: Active
-Effective: 2026-09-10
+Effective: 2026-09-14
 
 This repository uses a lightweight two-agent release model. It provides the separation of duties of a pull-request workflow without requiring every personal development task to create and merge a GitHub PR.
 
@@ -62,6 +62,7 @@ At minimum, a release review must cover:
 ```text
 repository status
 + complete final diff, including newly added files
++ changed-path attribution to the approved task/review scope
 + task-specific semantic review
 + security / boundary review where relevant
 + git diff --check
@@ -75,12 +76,11 @@ The reviewer must not remove a check merely to make the review faster.
 
 ## 3. Reviewer-found fixes
 
-An independent reviewer may make small, directly review-driven corrections discovered during the review, such as:
+An independent reviewer may make only small corrections that are directly necessary to close a confirmed finding in the reviewed change. Typical examples are restoring a lost invariant, closing a regression-test gap for that finding, or correcting documentation that became inaccurate because of that same fix.
 
-- restoring a lost invariant;
-- hardening a narrow edge case;
-- closing a clear test-coverage gap;
-- correcting inaccurate documentation or benchmark claims.
+A reviewer modification must remain on the same causal chain as the confirmed finding. Post-fix review is read-only by default: newly noticed hardening opportunities, cleanup, refactoring, or architectural improvements that are not required to prove the current fix complete must be reported separately rather than changed in the release tree. Scope may expand only when evidence shows the current fix itself is incomplete, or when the owner explicitly approves the broader scope.
+
+Before publication, every changed path must be attributable to the original approved task, a confirmed review finding, a directly necessary regression test, or directly necessary documentation. Any unexplained or opportunistic change must be reverted or separately approved.
 
 After any reviewer modification, the reviewer must restart the relevant final-review steps on the resulting tree and rerun the complete validation gate before publishing.
 

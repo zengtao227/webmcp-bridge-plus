@@ -27,6 +27,9 @@ test('WebMCP Plus Git instructions keep development publication off main', async
   assert.match(instructions, /Do not commit secrets/);
   assert.match(instructions, /not permission to act automatically/);
   assert.match(instructions, /docs\/release-review-policy\.md/);
+  assert.match(instructions, /post-fix self-review as read-only by default/);
+  assert.match(instructions, /same causal chain/);
+  assert.match(instructions, /every changed path must be attributable/);
 });
 
 test('WebMCP workspace Skill carries the conversation-resume workflow without destructive recovery', async () => {
@@ -78,6 +81,9 @@ test('independent release policy requires review and explicit authorization befo
   assert.match(policy, /- force-push;/);
   assert.match(policy, /material redesign/);
   assert.match(policy, /return the work to development/);
+  assert.match(policy, /Post-fix review is read-only by default/);
+  assert.match(policy, /same causal chain/);
+  assert.match(policy, /every changed path must be attributable/);
 });
 
 test('release policy is branch-protection-aware: direct push when allowed, PR + self-merge when required', async () => {

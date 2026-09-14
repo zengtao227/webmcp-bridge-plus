@@ -292,6 +292,14 @@ MAJOR
 Breaking architecture, contract, configuration, or compatibility change.
 ```
 
+### Future — Transactional one-command upgrade
+
+Status: **Deferred future feature.** Do not implement this as part of a bug/security-fix release merely to refresh an installed runtime.
+
+A future `webmcp upgrade` should reuse the inherited Native image, immutable host-runtime, container-controller, LaunchAgent, Tunnel, and doctor mechanisms rather than introduce a second deployment architecture. The upgrade must behave as one fail-safe transaction: stage the new image and pin without overwriting the live pin; verify and stop/remove the old container while the old pin is still authoritative; activate the new pin/container and immutable host runtime; restart the service; then require final doctor/canary validation before success.
+
+Rollback is a first-class requirement, not a follow-up: failure after activation must be able to restore both the previous image pin/container and the previous immutable host-runtime `current` artifact before service recovery. The current primitives do not yet expose all of those transaction boundaries, so this work should be designed and reviewed as a separate installer/deployer feature with explicit rollback tests. Plus should inherit this execution-host upgrade contract rather than create a second Plus-specific upgrade mechanism.
+
 ## 6. Current roadmap sequence
 
 ### A. Single approved workspace root
