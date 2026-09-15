@@ -92,7 +92,6 @@ webmcp-bridge-plus/
 │   ├── host/      # minimal host relay + response Secret Firewall
 │   └── deploy/    # image/config/container/source gates
 ├── gateway/       # retained path/secret policy modules used by Native
-├── extension/     # separate/frozen Web AI provider subsystem
 ├── adapter/deploy/deploy-host-runtime.js  # generic immutable host snapshot/source gate reused by Native
 ├── plus/          # Plus-only host identity, routing, and OpenSSH E2E logic
 ├── docs/
@@ -111,7 +110,7 @@ npm run build
 npm run check
 ```
 
-`npm run build` validates the extension package and Native source package. `dist/native/manifest.json` records the Native runtime/host/deploy source groups and digests; generated output is ignored by Git.
+`npm run build` validates the Native source package. `dist/native/manifest.json` records the Native runtime/host/deploy source groups and digests; generated output is ignored by Git.
 
 Base macOS onboarding is now exposed through one Native lifecycle surface:
 

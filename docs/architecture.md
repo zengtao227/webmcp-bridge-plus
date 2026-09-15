@@ -24,7 +24,7 @@ owner-selected host filesystem root
 
 DevSpace is no longer a production runtime dependency. The former DevSpace adapter/OAuth/session/recovery architecture is historical migration context and is documented separately in the ADR and legacy runbooks.
 
-The existing DeepSeek/Chrome-extension subsystem is a separate provider integration concern. It does not determine the Native ChatGPT runtime architecture.
+The former DeepSeek Web browser-extension subsystem was removed; DeepSeek Web integration lives in the independent `deepseek-webmcp` project.
 
 ## 2. Core design principle
 
