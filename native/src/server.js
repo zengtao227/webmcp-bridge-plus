@@ -88,6 +88,11 @@ const TOOLS = [
   },
 ];
 
+const TOOL_ARGUMENT_KEYS = new Map(TOOLS.map(({ name, inputSchema }) => [
+  name,
+  new Set(Object.keys(inputSchema.properties ?? {})),
+]));
+
 function jsonRpcError(id, code, message, data) {
   const error = { code, message };
   if (data !== undefined) {
@@ -126,13 +131,7 @@ function validateToolArguments(name, args) {
     throw new NativeWorkspaceError('Tool arguments must be an object.', 'invalid_arguments');
   }
 
-  const allowed = new Map([
-    ['open_workspace', new Set(['path'])],
-    ['read', new Set(['workspaceId', 'path', 'offset', 'limit'])],
-    ['write', new Set(['workspaceId', 'path', 'content'])],
-    ['edit', new Set(['workspaceId', 'path', 'edits'])],
-    ['bash', new Set(['workspaceId', 'command', 'workingDirectory', 'timeout'])],
-  ]).get(name);
+  const allowed = TOOL_ARGUMENT_KEYS.get(name);
 
   if (!allowed) {
     throw new NativeWorkspaceError('Unknown tool.', 'unknown_tool');

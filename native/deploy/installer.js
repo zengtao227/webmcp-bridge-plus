@@ -29,6 +29,7 @@ import {
   removeStaleElevatedContainer,
 } from './container-controller.js';
 import { defaultProtectedPaths } from './control-plane-paths.js';
+import { NATIVE_CONTAINER_NAME, NATIVE_ELEVATED_LEASE_LABEL } from './container-policy.js';
 import {
   buildElevatedWorkspaceConfig,
   clearElevatedLease,
@@ -784,7 +785,7 @@ async function cleanupFreshInstall(paths, execFileImpl, sleepImpl, { containerCr
     await execFileImpl(paths.tunnelClient, ['runtimes', 'rm', TUNNEL_ALIAS], tunnelExecOptions(paths)).catch(() => {});
   }
   if (containerCreated) {
-    await execFileImpl('docker', ['rm', '-f', 'webmcp-native'], { encoding: 'utf8', maxBuffer: 1024 * 1024 }).catch(() => {});
+    await execFileImpl('docker', ['rm', '-f', NATIVE_CONTAINER_NAME], { encoding: 'utf8', maxBuffer: 1024 * 1024 }).catch(() => {});
   }
   await Promise.all([
     rm(paths.workspaceConfig, { force: true }),
@@ -964,7 +965,7 @@ export async function reconfigureWebMcp({
   } catch (error) {
     let rollbackError = null;
     try {
-      await execFileImpl('docker', ['rm', '-f', 'webmcp-native'], { encoding: 'utf8', maxBuffer: 1024 * 1024 }).catch(() => {});
+      await execFileImpl('docker', ['rm', '-f', NATIVE_CONTAINER_NAME], { encoding: 'utf8', maxBuffer: 1024 * 1024 }).catch(() => {});
       await persistWorkspaceConfig(paths.workspaceConfig, previousConfig, { platform: 'darwin' });
       await ensureNativeContainer({
         configPath: paths.workspaceConfig,
@@ -1252,7 +1253,7 @@ export async function revokeElevationWebMcp({
   const normalConfig = await loadWorkspaceConfig(paths.workspaceConfig, { platform: 'darwin' });
   const container = await inspectNativeContainer({ execFileImpl });
   const leaseKind = await pathKind(paths.elevatedLease);
-  const containerLeaseId = container?.Config?.Labels?.['com.webmcp.native.elevated-lease'] ?? null;
+  const containerLeaseId = container?.Config?.Labels?.[NATIVE_ELEVATED_LEASE_LABEL] ?? null;
   const containerElevated = Boolean(containerLeaseId);
   if (leaseKind === 'absent' && !containerElevated) {
     return Object.freeze({ action: 'unchanged', mode: 'normal', root: normalConfig.hostRoot });

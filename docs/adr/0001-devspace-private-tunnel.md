@@ -231,11 +231,7 @@ V2 在 2026-09-08 已完成真实环境验证：
 - DevSpace：仅 `127.0.0.1:7676`；
 - ChatGPT 已完成真实只读 DevSpace tool call。
 
-详细运行验证见：
-
-- `../private-tunnel-adapter.md`
-- `../../.agent/evals/secure-mcp-tunnel.md`
-- `../../.agent/evals/chatgpt-devspace-tunnel.md`
+详细迁移验证材料曾记录在 retired adapter/eval 文档中；这些已从 active tree 删除，仍可通过 Git 历史查阅。
 
 ## 已知限制
 

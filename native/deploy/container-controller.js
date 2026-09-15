@@ -15,7 +15,6 @@ import { loadImagePin } from './image-pin.js';
 import { DEFAULT_WORKSPACE_CONFIG, loadWorkspaceConfig, normalizeWorkspaceConfig } from './workspace-config.js';
 
 const execFileAsync = promisify(execFile);
-
 export class ContainerControllerError extends Error {
   constructor(message, code, options = {}) {
     super(message, options.cause ? { cause: options.cause } : undefined);

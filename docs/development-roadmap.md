@@ -158,15 +158,13 @@ Status: Implemented / active measurement since 2026-09-10
 Actions:
 
 1. Use the rules above for direct Native WebMCP coding tasks.
-2. Use `npm run devspace:inspect` for the fixed repository snapshot (status, diff stat, diff check, recent commits) when those checks are relevant.
-3. Use `npm run devspace:validate` for the fixed final gate (diff check, complete repository check, final status).
-4. Batch task-specific read-only inspection around those fixed workflows instead of splitting predictable checks into separate tunnel round trips.
+2. Batch predictable repository inspection in one bounded `bash` call when useful, for example `git status --short --branch`, `git diff --stat`, `git diff --check`, and recent commits.
+3. Batch final mechanical validation in one bounded `bash` call when useful, while still running the repository's authoritative `npm run check` gate and inspecting final Git status/diff.
+4. Keep task-specific source/context inspection and data-dependent edits serial when correctness requires it.
 5. Reuse workspaceId for the same Native process/root.
-6. Record real task evidence, including cases where repeated serial round trips were genuinely required by data dependencies.
+6. Record real task evidence when repeated serial round trips are genuinely required by data dependencies.
 
-The `devspace:*` script names are retained repository command names from the migration period; they do not imply a current DevSpace runtime dependency.
-
-The first self-hosted benchmark is documented in [`developer-efficiency-benchmark.md`](./developer-efficiency-benchmark.md). This phase adds repository-local orchestration only: **no new MCP tools, permissions, host access, or security boundary changes**.
+The former repository-local `devspace:inspect` / `devspace:validate` wrappers were retired after proving that ordinary bounded `bash` batching captures the useful round-trip reduction without adding MCP methods or permissions.
 
 Quality invariant: repository-local batching may replace only predictable mechanical round trips. It must **not** replace task-specific code/context inspection, semantic review of the final change set, or any validation required to establish correctness. When speed and confidence conflict, preserve the higher-confidence workflow even if it requires another WebMCP round trip.
 
@@ -268,7 +266,7 @@ The user should not normally need to specify operating system, machine name, or 
 
 Platform-specific startup/operations belong behind the execution-host boundary. For example, macOS may use `launchd`; Windows may use a Windows Service or Task Scheduler. Stable `webmcp-bridge` remains single-host. This Plus repository now owns proactive multi-host development on top of that inherited Native execution-host foundation.
 
-The earlier registry-based multi-host proposal is retained as historical design input: [`roadmap-v2.2-multi-host-routing.md`](./roadmap-v2.2-multi-host-routing.md). Reuse its fail-closed routing invariants where still valid, but do not revive its retired DevSpace runtime architecture.
+The 2026-09-09 DevSpace-era multi-host proposal is retired from the active tree and remains available in Git history. Current Plus routing/transport contracts live in `plus-control-plane.md` and `plus-transport-options.md`; do not revive the retired DevSpace runtime architecture.
 
 ### 5.1 Versioning / Product Line
 
@@ -332,7 +330,7 @@ The 2026-09-09 registry experiments remain historical evidence for fail-closed r
 
 ### B. DevSpace container auto-recovery
 
-Status: Completed historical migration milestone, then retired from production after the Native cutover. Host-side `dsup.sh --ensure` was independently reviewed, deployed, and verified on the reference macOS host, including a real machine-reboot recovery test on 2026-09-10. The separate stale-OAuth-after-container-replacement bug was root-caused and fixed in `#resetOAuthState()` (PR #4, merged, `main` at `249915ce159bedf235a12b350d0ceecf61027aff`); see `docs/troubleshooting.md` §19.
+Status: Completed historical migration milestone, then retired from production after the Native cutover. Host-side `dsup.sh --ensure` was independently reviewed, deployed, and verified on the reference macOS host, including a real machine-reboot recovery test on 2026-09-10. The separate stale-OAuth-after-container-replacement bug was root-caused and fixed in `#resetOAuthState()` (PR #4, merged, `main` at `249915ce159bedf235a12b350d0ceecf61027aff`). The retired migration troubleshooting record remains available in Git history.
 
 Historical goal: prove unattended recovery of the DevSpace transition runtime without weakening its security model. This mechanism is no longer required by current production.
 
@@ -407,9 +405,7 @@ The remaining gate is to run that harness from a genuinely fresh Mac or fresh ma
 
 ### D. Developer Efficiency Phase 1
 
-Status: IMPLEMENTED / active measurement from 2026-09-10 against the current WebMCP workflow.
-
-Use the repository-local inspection/validation workflows on real development tasks and keep collecting comparable evidence before changing the MCP surface.
+Status: COMPLETED. The measured workflow result is retained as a design decision: use ordinary bounded `bash` batching for predictable mechanical repository checks rather than dedicated inspection/validation wrappers or new MCP tools.
 
 ### E. Inherited Native execution-host baseline
 
@@ -447,9 +443,9 @@ Core invariants:
 
 Status: **Decision closed — keep the current five-tool WebMCP surface.**
 
-The historical DevSpace benchmark and a second controlled Native WebMCP benchmark on 2026-09-13 both show that repository-local batching removes the material fixed round-trip overhead without adding MCP methods or permissions. In the Native sample, inspection dropped from 4 WebMCP round trips / 22.585 s to 1 round trip / 0.224 s, while validation dropped from 3 round trips / 30.577 s to 1 round trip / 17.379 s; the remaining validation time was dominated by the real repository test/build work.
+Historical DevSpace and controlled Native WebMCP measurements showed that batching predictable repository checks removes the material fixed round-trip overhead without adding MCP methods or permissions; remaining validation time was dominated by real repository test/build work.
 
-Do not add `inspect_workspace` or `validate_workspace` merely to wrap the existing repository workflows. Reopen Phase 2 only if repeated future tasks show material overhead that cannot be removed by safe batched `bash`/`read` usage. Batch-write capability remains out of scope absent separate evidence and security review.
+Do not add `inspect_workspace` or `validate_workspace` merely to wrap ordinary repository commands. Reopen Phase 2 only if repeated future tasks show material overhead that cannot be removed by safe batched `bash`/`read` usage. Batch-write capability remains out of scope absent separate evidence and security review.
 
 ### H. Local time-bound elevated Mac access lease
 

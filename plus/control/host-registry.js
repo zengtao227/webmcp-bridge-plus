@@ -92,14 +92,6 @@ export function parseHostRegistry(text) {
 
   const registry = {
     version: 1,
-    hostCount: hosts.size,
-    projectCount: projects.size,
-    listHosts() {
-      return Object.freeze([...hosts.values()]);
-    },
-    listProjects() {
-      return Object.freeze([...projects.values()]);
-    },
     resolveProject(reference) {
       if (typeof reference !== 'string' || !PROJECT_ID_PATTERN.test(reference)) {
         return Object.freeze({ status: 'invalid' });

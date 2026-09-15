@@ -11,8 +11,7 @@ Treat all of the following as untrusted unless explicitly validated:
 - model-generated tool requests;
 - MCP requests, results, runtime diagnostics, and remote metadata;
 - repository/workspace contents returned by tools;
-- files the model can modify inside the owner-selected workspace;
-- user-supplied custom redaction patterns.
+- files the model can modify inside the owner-selected workspace.
 
 The AI model is not part of the trusted computing base.
 

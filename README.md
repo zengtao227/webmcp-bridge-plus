@@ -147,12 +147,12 @@ Current Native documents:
 - [`docs/threat-model.md`](./docs/threat-model.md) — security threats and mitigations;
 - [`docs/release-review-policy.md`](./docs/release-review-policy.md) — independent release-review rules.
 
-Historical migration material:
+Historical migration material retained in the active tree:
 
 - [`docs/native-cutover-runbook.md`](./docs/native-cutover-runbook.md) — completed Native cutover procedure/evidence model;
-- [`docs/adr/0001-devspace-private-tunnel.md`](./docs/adr/0001-devspace-private-tunnel.md) — historical DevSpace private-tunnel decision;
-- [`docs/private-tunnel-adapter.md`](./docs/private-tunnel-adapter.md) — retired DevSpace tunnel implementation;
-- [`docs/roadmap-v2.2-multi-host-routing.md`](./docs/roadmap-v2.2-multi-host-routing.md) — historical DevSpace-era multi-host design input; useful invariants may be reused, but not its retired runtime architecture.
+- [`docs/adr/0001-devspace-private-tunnel.md`](./docs/adr/0001-devspace-private-tunnel.md) — historical DevSpace private-tunnel decision.
+
+Other retired migration implementation notes, troubleshooting records, evals, and superseded roadmaps remain available in Git history rather than the active documentation set.
 
 ## Product direction
 
