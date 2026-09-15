@@ -415,13 +415,13 @@ Plus reuses the production-accepted Native execution-host model: immutable host 
 
 ### F. Plus multi-host foundation
 
-Status: **Active — minimal Phase 1 host identity + exact project registry + fail-closed route decision implemented. The first concrete E2E transport is OpenSSH using stable `hostId` as the owner-managed SSH Host alias. Live host state and capability negotiation remain deferred pending a real consumer.**
+Status: **Active — minimal Phase 1 registry `hostId` + exact project registry + fail-closed route decision implemented. The first concrete E2E transport is OpenSSH using that `hostId` as the owner-managed SSH Host alias. SSH host keys provide transport identity; live host state and capability negotiation remain deferred pending a real consumer.**
 
 The first Plus development target is the multi-host routing foundation. It must sit above independent Native WebMCP execution hosts rather than widen one host into a cross-machine filesystem/shell proxy. The minimal Phase 1 contract is documented in [`plus-control-plane.md`](./plus-control-plane.md). [`plus-transport-options.md`](./plus-transport-options.md) records the first direct OpenSSH binding; the transport reuses mature SSH security and the existing immutable Native stdio host entrypoint instead of adding WebMCP cryptography.
 
 Sequence:
 
-1. stable execution-host identity that does not rely on hostname alone;
+1. strict logical `hostId` routing in the data-only registry, with SSH host keys providing transport identity;
 2. data-only host/project registry with no secrets or runtime credentials;
 3. explicit fail-closed host/project route decision;
 4. use OpenSSH over the owner's existing mesh/VPN as the first concrete transport, with stable `hostId` passed directly as the SSH Host alias;

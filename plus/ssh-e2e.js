@@ -2,7 +2,7 @@
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { defaultPlusControlPaths } from './control/host-identity.js';
+import { defaultPlusControlPaths } from './control/control-paths.js';
 import { loadHostRegistry } from './control/host-registry.js';
 import { resolveProjectRoute } from './control/route-decision.js';
 
