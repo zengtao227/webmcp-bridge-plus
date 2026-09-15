@@ -26,7 +26,7 @@ function fixture(overrides = {}) {
   });
 }
 
-test('data-only registry maps an exact project id to one stable host identity', () => {
+test('data-only registry maps an exact project id to one stable hostId', () => {
   const registry = parseHostRegistry(fixture());
 
   const exact = registry.resolveProject('webmcp-bridge-plus');

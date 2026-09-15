@@ -4,27 +4,17 @@ Status: Phase 1 routing foundation implemented; first concrete E2E transport is 
 
 This document defines the smallest Plus-only control-plane state needed to route one exact project to one execution host. It sits above independent Native WebMCP execution hosts and does not widen the stable five-tool execution-host boundary.
 
-## 1. Stable host identity
+## 1. Routing hostId and transport identity
 
-Each execution host has one opaque persistent identity:
+Each registry host is identified for routing by one strict logical `hostId`:
 
 ```text
 host_<32 lowercase hex characters>
 ```
 
-The identity is generated randomly and stored outside the model-writable workspace at:
+`hostId` is data in the Plus registry, not a separate host-local identity file or credential. It is used only for exact project → host routing and is passed unchanged as the owner-managed OpenSSH `Host` alias.
 
-```text
-~/.local/share/webmcp-plus/host-identity.json
-```
-
-The loader requires the identity to be a regular non-symlink file owned by the current owner UID, mode `0600`, with strict bounded JSON containing only `version`, `hostId`, and `createdAt`.
-
-The value is not derived from hostname, user name, IP address, hardware name, project path, transport endpoint, or credentials. It answers only:
-
-> Which execution host is this?
-
-It grants no filesystem, credential, or transport authority by itself.
+The routing identifier grants no filesystem, credential, or transport authority. Transport identity is provided by the SSH server host key; authentication and connection details remain in owner-managed OpenSSH configuration and credentials. Plus does not create, persist, or manage a second host-identity state alongside the registry.
 
 ## 2. Data-only host/project registry
 

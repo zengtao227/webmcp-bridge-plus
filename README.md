@@ -93,7 +93,7 @@ webmcp-bridge-plus/
 │   └── deploy/    # image/config/container/source gates
 ├── gateway/       # retained path/secret policy modules used by Native
 ├── adapter/deploy/deploy-host-runtime.js  # generic immutable host snapshot/source gate reused by Native
-├── plus/          # Plus-only host identity, routing, and OpenSSH E2E logic
+├── plus/          # Plus-only routing/control paths and OpenSSH E2E logic
 ├── docs/
 ├── scripts/
 └── tests/
@@ -142,7 +142,7 @@ Current Native documents:
 - [`docs/native-tool-contract.md`](./docs/native-tool-contract.md) — five-tool MCP behavior;
 - [`docs/usage.md`](./docs/usage.md) — normal `@WebMCP` workflow;
 - [`docs/development-roadmap.md`](./docs/development-roadmap.md) — active Plus roadmap, inherited Native baseline, multi-host phases, and durable-session direction;
-- [`docs/plus-control-plane.md`](./docs/plus-control-plane.md) — minimal Phase 1 stable host identity, data-only registry, route decision, and protected control-plane contract;
+- [`docs/plus-control-plane.md`](./docs/plus-control-plane.md) — minimal Phase 1 hostId routing, data-only registry, route decision, and protected control-plane contract;
 - [`docs/plus-transport-options.md`](./docs/plus-transport-options.md) — first concrete OpenSSH E2E transport and its fail-closed boundary;
 - [`docs/threat-model.md`](./docs/threat-model.md) — security threats and mitigations;
 - [`docs/release-review-policy.md`](./docs/release-review-policy.md) — independent release-review rules.
@@ -160,7 +160,7 @@ Plus development starts **before** a second production host becomes urgent. The 
 
 The planned sequence is:
 
-1. establish stable host identity and a data-only host/project registry;
+1. establish stable registry `hostId` routing and a data-only host/project registry;
 2. add explicit, fail-closed host routing without filesystem scanning or fallback guessing;
 3. use OpenSSH as the first concrete E2E transport, with stable `hostId` reused directly as the owner-managed SSH Host alias and no custom cryptography;
 4. validate the fixed SSH → immutable Native stdio path on two owner-controlled hosts, adding live host state only if an actual runtime consumer requires it;
