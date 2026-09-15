@@ -520,12 +520,6 @@ export async function deployHostRuntime({
       });
       await rename(staging, finalRelease);
       stagingExists = false;
-    } else {
-      await verifyRelease(finalRelease, {
-        expectedArtifactId: source.artifactId,
-        expectedPayloadSha256: source.payloadSha256,
-        entrypoint,
-      });
     }
 
     await verifyRelease(finalRelease, {

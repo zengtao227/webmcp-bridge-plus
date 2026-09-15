@@ -133,7 +133,7 @@ test('Native host boundary reuses the immutable source-gated runtime mechanism w
     assert.equal(current.artifactId, deployed.artifactId);
     assert.equal(current.entrypoint, deployed.entrypoint);
   } finally {
-    await rm(parent, { recursive: true, force: true });
+    await rm(parent, { recursive: true, force: true, maxRetries: 3 });
   }
 });
 
@@ -146,6 +146,6 @@ test('Native host boundary refuses to deploy inside its writable source reposito
       /outside every WebMCP-writable root/,
     );
   } finally {
-    await rm(parent, { recursive: true, force: true });
+    await rm(parent, { recursive: true, force: true, maxRetries: 3 });
   }
 });

@@ -92,19 +92,6 @@ No provider adapter or transport may bypass that boundary. The former DeepSeek W
 - evaluate normalized segments and basename;
 - adversarial tests for traversal variants.
 
-### T4 — Malicious custom redaction configuration
-
-**Scenario:** Invalid or pathological user regex configuration weakens scanning or crashes the policy layer.
-
-**Mitigations:**
-
-- compile/validate policy at configuration time;
-- invalid rules fail closed;
-- limit flags/features supported by the public policy API;
-- do not silently skip malformed patterns.
-
-**Future work:** Add explicit complexity/length limits if arbitrary regex configuration is exposed in the UI.
-
 ### T5–T7 — Retired browser-extension threats
 
 T5 (DeepSeek session credential extraction), T6 (MCP OAuth credential leakage in extension state) and T7 (broad Chrome permissions) applied to the removed DeepSeek Web browser extension and no longer have a code path in this repository.

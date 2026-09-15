@@ -169,7 +169,11 @@ This allows a broad owner-selected root without treating WebMCP's own control pl
 
 No unattended host process executes mutable code from the model-writable workspace.
 
-The repository is development source; production host execution uses an immutable source-gated snapshot outside the workspace.
+The repository is development source; production host execution uses an immutable source-gated snapshot outside the workspace. The deployer accepts only an explicit runtime payload whose files are regular, non-symlink Git blobs at `HEAD`, byte-identical to the reviewed Git objects, and free of staged/unstaged replacement. Snapshot bytes are read from those exact Git objects after validation rather than trusting a mutable working-tree read.
+
+Each immutable release carries a manifest binding the full Git commit, aggregate payload digest, entrypoint, and exact file set with per-file digest, size, and deployed mode. Release trees contain no symlinks; the runtime-level `current` pointer is the only intentional symlink and must resolve to the canonical verified release. A new release is assembled under a staging directory, verified, atomically renamed into the content-addressed releases area, verified again, and only then selected through `current`. The existing `current` release is verified before promotion begins; a failed build or verification does not repoint it.
+
+These source/promotion checks are part of the host execution trust boundary, not a production-upgrade transaction. Repository changes alone do not activate a new image or host snapshot; live activation remains a separately authorized operation with its own reviewed deployment/rollback procedure.
 
 At startup the host boundary:
 
@@ -292,12 +296,7 @@ Native WebMCP did **not** preserve DevSpace implementation mechanisms that were 
 - separate DevSpace container recovery;
 - adapter-to-DevSpace proxy logic.
 
-For historical detail see:
-
-- [`adr/0001-devspace-private-tunnel.md`](./adr/0001-devspace-private-tunnel.md);
-- [`private-tunnel-adapter.md`](./private-tunnel-adapter.md);
-- [`host-runtime-boundary.md`](./host-runtime-boundary.md);
-- [`roadmap-v2.2-multi-host-routing.md`](./roadmap-v2.2-multi-host-routing.md).
+Historical DevSpace/private-tunnel design evidence is retained in [`adr/0001-devspace-private-tunnel.md`](./adr/0001-devspace-private-tunnel.md) and the completed [`native-cutover-runbook.md`](./native-cutover-runbook.md). Superseded implementation notes and roadmaps remain available in Git history.
 
 ## 14. Future capability boundary
 

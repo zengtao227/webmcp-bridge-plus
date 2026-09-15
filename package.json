@@ -21,8 +21,6 @@
     "native:canary": "node native/deploy/canary.js",
     "webmcp": "node native/deploy/installer.js",
     "build": "npm run build:native",
-    "check": "npm run lint && npm test && npm run build",
-    "devspace:inspect": "node scripts/devspace-efficiency.mjs inspect",
-    "devspace:validate": "node scripts/devspace-efficiency.mjs validate"
+    "check": "npm run lint && npm test && npm run build"
   }
 }
