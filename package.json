@@ -10,7 +10,6 @@
   "scripts": {
     "test": "node --test",
     "lint": "node scripts/check-js.mjs",
-    "build:extension": "node scripts/build.mjs",
     "build:native": "node scripts/build-native.mjs",
     "build:menubar": "./scripts/build-menubar.sh",
     "test:menubar": "./scripts/test-menubar.sh",
@@ -21,7 +20,7 @@
     "native:deploy-host": "node native/deploy/deploy-host-boundary.js",
     "native:canary": "node native/deploy/canary.js",
     "webmcp": "node native/deploy/installer.js",
-    "build": "npm run build:extension && npm run build:native",
+    "build": "npm run build:native",
     "check": "npm run lint && npm test && npm run build",
     "devspace:inspect": "node scripts/devspace-efficiency.mjs inspect",
     "devspace:validate": "node scripts/devspace-efficiency.mjs validate"

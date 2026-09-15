@@ -19,7 +19,6 @@ Primary assets to protect include:
 - database passwords;
 - bearer/access/refresh tokens;
 - passphrases;
-- DeepSeek Web session credentials;
 - MCP OAuth credentials;
 - sensitive source/configuration that the user did not authorize for model disclosure.
 
@@ -52,7 +51,7 @@ A second critical boundary exists on the return path:
 raw Native MCP result / diagnostic -> host Secret Firewall -> sanitized model context
 ```
 
-No provider adapter or transport may bypass that boundary. The DeepSeek/Chrome-extension subsystem is separate and retains its own browser-origin trust boundary.
+No provider adapter or transport may bypass that boundary. The former DeepSeek Web browser-extension subsystem was removed; DeepSeek Web integration is threat-modeled in the independent `deepseek-webmcp` project.
 
 ## Threats and mitigations
 
@@ -106,42 +105,13 @@ No provider adapter or transport may bypass that boundary. The DeepSeek/Chrome-e
 
 **Future work:** Add explicit complexity/length limits if arbitrary regex configuration is exposed in the UI.
 
-### T5 — DeepSeek session credential extraction
+### T5–T7 — Retired browser-extension threats
 
-**Scenario:** Extension code copies browser-managed DeepSeek credentials into storage, logs, MCP requests, or another context where they can leak.
-
-**Mitigations:**
-
-- prefer authenticated requests inside `chat.deepseek.com` page/session context;
-- never persist session credential values;
-- never include them in MCP payloads or logs;
-- require design review before any exception.
-
-### T6 — MCP OAuth credential leakage
-
-**Scenario:** MCP access/refresh tokens are persisted in ordinary extension state or returned to the model via errors/logs.
-
-**Mitigations:**
-
-- keep auth handling isolated from model-visible messages;
-- redact authorization headers and bearer values;
-- never log raw tokens;
-- persist endpoint configuration separately from credentials.
-
-### T7 — Broad Chrome permissions
-
-**Scenario:** The extension gains access to unrelated websites or host powers, increasing compromise blast radius.
-
-**Mitigations:**
-
-- only `chat.deepseek.com` is pre-authorized;
-- MCP origins requested individually by explicit user action;
-- no `<all_urls>`, blanket HTTP access, Native Messaging, or `chrome.debugger`;
-- permission changes require threat-model review.
+T5 (DeepSeek session credential extraction), T6 (MCP OAuth credential leakage in extension state) and T7 (broad Chrome permissions) applied to the removed DeepSeek Web browser extension and no longer have a code path in this repository.
 
 ### T8 — Direct host compromise through bridge design
 
-**Scenario:** The model or optional browser-provider subsystem gains a path to unrestricted host shell/filesystem access, or the Native runtime is created with a broader host boundary than the owner authorized.
+**Scenario:** The model gains a path to unrestricted host shell/filesystem access, or the Native runtime is created with a broader host boundary than the owner authorized.
 
 **Mitigations:**
 
@@ -154,7 +124,7 @@ No provider adapter or transport may bypass that boundary. The DeepSeek/Chrome-e
 
 ### T9 — Tool result bypass
 
-**Scenario:** A code path sends raw MCP output directly to the DeepSeek continuation mechanism without scanning.
+**Scenario:** A code path sends raw MCP output to the model without scanning.
 
 **Mitigations:**
 
@@ -194,7 +164,6 @@ No provider adapter or transport may bypass that boundary. The DeepSeek/Chrome-e
 - connect only to user-approved HTTPS origins;
 - treat all MCP results as untrusted;
 - scan return content regardless of backend trust;
-- do not grant an MCP server access to DeepSeek session credentials.
 
 ### T13 — Container-to-host execution through writable runtime code
 
@@ -318,7 +287,6 @@ The base Native product intentionally does not attempt to secure capabilities it
 - general browser automation;
 - Google Drive / OneDrive;
 - unrelated memory systems;
-- DeepSeek API-key execution.
 
 Adding any of these changes the threat model and requires an explicit architecture decision first.
 
@@ -348,4 +316,4 @@ Update this threat model before merging changes that add:
 - a new MCP transport/auth mechanism;
 - a tool class with broader filesystem/network/command capabilities;
 - telemetry/logging;
-- a provider adapter beyond DeepSeek Web.
+- a model provider adapter.

@@ -2,7 +2,7 @@
 
 WebMCP Bridge exists to make AI-assisted local development safer. Security controls in this repository are part of the product contract, not optional guidance to the model.
 
-Native WebMCP is the current production architecture. The former DevSpace runtime is retired from the production execution path. DeepSeek/Chrome-extension code remains a separate provider subsystem and does not define the Native host/runtime trust boundary.
+Native WebMCP is the current production architecture. The former DevSpace runtime is retired from the production execution path. The former DeepSeek Web browser-extension subsystem was removed; DeepSeek Web integration is developed in the independent `deepseek-webmcp` project.
 
 ## Trust boundaries
 
@@ -12,7 +12,6 @@ Treat all of the following as untrusted unless explicitly validated:
 - MCP requests, results, runtime diagnostics, and remote metadata;
 - repository/workspace contents returned by tools;
 - files the model can modify inside the owner-selected workspace;
-- DeepSeek page content and page-originated messages when that provider subsystem is used;
 - user-supplied custom redaction patterns.
 
 The AI model is not part of the trusted computing base.
@@ -27,9 +26,7 @@ The AI model is not part of the trusted computing base.
 6. **Fixed MCP root.** The model sees only `/workspace`. The owner selects the host filesystem root mapped there; protected WebMCP/tunnel control-plane paths remain carved out from model access.
 7. **Host control plane stays outside model-writable workspace.** Tunnel credentials, runtime configuration, source/image pins, LaunchAgent state, and immutable host runtime material must not become ordinary workspace files.
 8. **Git publication is separately authorized.** Normal coding does not require a host Git credential. When publication is enabled, use only repository-scoped, revocable, read-only-mounted credential material plus explicit Git identity and strict host-key checking.
-9. **Provider least privilege.** Chrome permissions for the optional DeepSeek subsystem stay limited to the DeepSeek origin, non-secret configuration storage, and explicitly approved MCP origins.
-10. **Session credentials stay ephemeral.** DeepSeek Web session credentials must not be persisted to `chrome.storage`, disk, logs, MCP, analytics, or third parties.
-11. **Tests use fake credentials only.** Never place real exchange, cloud, source-control, wallet, database, SSH, tunnel, or DeepSeek credentials in tests or fixtures.
+9. **Tests use fake credentials only.** Never place real exchange, cloud, source-control, wallet, database, SSH, or tunnel credentials in tests or fixtures.
 
 ## Secret Firewall behavior
 
@@ -62,28 +59,11 @@ The scanner redacts high-confidence secret material while preserving enough surr
 
 Redaction should report reasons/counts but never expose the raw matched secret in metadata.
 
-## DeepSeek Web adapter requirements
-
-If the adapter needs authenticated DeepSeek Web requests, the preferred design is to execute those requests in the `chat.deepseek.com` page/session context so browser-managed session credentials never leave that context.
-
-Before any implementation that copies a DeepSeek session credential into an extension context, document:
-
-- why page-context execution is insufficient;
-- exactly which credential is moved;
-- where it exists in memory;
-- how long it exists;
-- why it cannot be persisted or logged;
-- additional threat impact and mitigations.
-
-That design requires explicit review before merging.
-
 ## MCP / tunnel requirements
 
 The production Secure MCP Tunnel connects to the immutable Native host entrypoint. The local MCP relay uses stdio framing: stdout is reserved for JSON-RPC and diagnostics go to stderr.
 
-Tunnel/runtime credentials remain host-side and are not mounted into the Native container or exposed as MCP configuration. OAuth/access/refresh tokens used by optional provider integrations must remain isolated from model-visible messages and diagnostics.
-
-Provider-side MCP origin access, when applicable, should be requested per approved HTTPS origin rather than through blanket `http://*/*`, `https://*/*`, or `<all_urls>` permissions.
+Tunnel/runtime credentials remain host-side and are not mounted into the Native container or exposed as MCP configuration.
 
 The retired DevSpace stdio adapter/OAuth/session mechanisms are historical migration implementation, not production requirements.
 
