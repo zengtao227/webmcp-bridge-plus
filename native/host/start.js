@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { lstat } from 'node:fs/promises';
 import { createHostRelay } from './relay.js';
+import { respondUnavailable } from './unavailable-responder.js';
 import {
   ensureNativeContainer,
   removeStaleElevatedContainer,
@@ -111,4 +112,5 @@ try {
 } catch (error) {
   safeDiagnostic(`Native WebMCP host boundary failed: ${error.message}`);
   process.exitCode = 1;
+  respondUnavailable(error.message);
 }

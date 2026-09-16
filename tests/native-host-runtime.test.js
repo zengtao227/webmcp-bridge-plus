@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { copyFile, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -66,6 +66,8 @@ test('Native host boundary source-gates the container controller and every host-
     'native/deploy/installer.js',
     'native/deploy/runtime-payload.js',
     'native/deploy/workspace-config.js',
+    'native/host/request-ledger.js',
+    'native/host/unavailable-responder.js',
   ]) {
     assert.ok(NATIVE_HOST_RUNTIME_PAYLOAD.includes(required), `${required} must be in the immutable host payload`);
   }
@@ -147,5 +149,38 @@ test('Native host boundary refuses to deploy inside its writable source reposito
     );
   } finally {
     await rm(parent, { recursive: true, force: true, maxRetries: 3 });
+  }
+});
+
+// A module the host entrypoint imports but the payload omits only fails once the
+// immutable release is deployed, where the boundary cannot even start.
+test('immutable host payload is dependency-complete for the host entrypoint', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'webmcp-native-host-entry-'));
+  const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  try {
+    for (const relativePath of NATIVE_HOST_RUNTIME_PAYLOAD) {
+      const destination = path.join(root, relativePath);
+      await mkdir(path.dirname(destination), { recursive: true });
+      await copyFile(path.join(repo, relativePath), destination);
+    }
+
+    const child = spawn(process.execPath, [path.join(root, NATIVE_HOST_ENTRYPOINT)], {
+      env: {
+        ...process.env,
+        WEBMCP_WORKSPACE_CONFIG: path.join(root, 'missing-workspace.json'),
+        WEBMCP_NATIVE_IMAGE_PIN: path.join(root, 'missing-image.json'),
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let stderr = '';
+    child.stderr.on('data', (chunk) => { stderr += chunk.toString('utf8'); });
+    child.stdin.end();
+    const code = await new Promise((resolve) => child.on('close', resolve));
+
+    assert.equal(code, 1);
+    assert.doesNotMatch(stderr, /ERR_MODULE_NOT_FOUND|Cannot find module/);
+    assert.match(stderr, /Native WebMCP host boundary failed:/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });

@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { sanitizeJsonRpcEnvelope, sanitizeLogText } from './firewall.js';
+import { buildHostErrorResponse, createRequestLedger } from './request-ledger.js';
 
 const DEFAULT_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MAX_LOG_RECORD_BYTES = 64 * 1024;
@@ -43,6 +44,7 @@ export function createHostRelay({
   }
 
   let child = null;
+  const ledger = createRequestLedger();
   let buffer = Buffer.alloc(0);
   let stderrBuffer = Buffer.alloc(0);
   let stderrMarkerTail = '';
@@ -63,12 +65,32 @@ export function createHostRelay({
     }
   }
 
+  // An unanswered request is indistinguishable from a slow one: tunnel-client
+  // holds it until its own deadline and then drops it without posting a response,
+  // which the Web UI shows as a turn that never ends. Fail-closed still terminates
+  // the host process; it just refuses the outstanding requests first.
+  function refuseOutstanding(reason) {
+    const ids = ledger.drain();
+    if (ids.length === 0) {
+      return;
+    }
+    const message = `Native WebMCP host boundary failed closed: ${reason}`;
+    for (const id of ids) {
+      try {
+        writeLine(stdout, buildHostErrorResponse(id, message));
+      } catch {
+        writeDiagnostic('Unable to refuse an outstanding request before failing closed.');
+      }
+    }
+  }
+
   function failClosed(reason) {
     if (failed || closed) {
       return;
     }
     failed = true;
     writeDiagnostic(reason);
+    refuseOutstanding(reason);
     process.exitCode = 1;
     stdin.pause();
     stdin.unref?.();
@@ -93,7 +115,9 @@ export function createHostRelay({
       writeLine(stdout, sanitizeJsonRpcEnvelope(parsed));
     } catch {
       failClosed('Native runtime response was blocked by host policy.');
+      return;
     }
+    ledger.settle(parsed?.id);
   }
 
   function onChildStdout(chunk) {
@@ -213,9 +237,13 @@ export function createHostRelay({
     if (deadlineAt !== null && Date.now() >= deadlineAt) {
       deadlineTriggered = true;
       stdin.pause();
+      // The chunk is never forwarded, so its requests can only be answered here.
+      ledger.observe(chunk);
+      refuseOutstanding('temporary elevated access expired');
       onDeadline();
       return;
     }
+    ledger.observe(chunk);
     child.stdin.write(chunk);
   }
 

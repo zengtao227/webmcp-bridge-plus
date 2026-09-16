@@ -357,3 +357,48 @@ test('host relay exits non-zero after child failure even while tunnel stdin stay
   assert.match(stderr, /boom/);
   assert.match(stderr, /Native runtime exited unexpectedly \(3\)/);
 });
+
+test('a fail-closed relay refuses the outstanding request instead of going silent', async () => {
+  const harness = createHarness();
+
+  harness.stdin.write('{"jsonrpc":"2.0","id":"req-1","method":"tools/call","params":{"name":"read"}}\n');
+  await new Promise((resolve) => setImmediate(resolve));
+
+  harness.child.emit('exit', 1, null);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const frames = harness.stdout().trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  assert.equal(frames.length, 1);
+  assert.equal(frames[0].id, 'req-1');
+  assert.equal(frames[0].jsonrpc, '2.0');
+  assert.equal(frames[0].error.code, -32001);
+  assert.match(frames[0].error.message, /failed closed/);
+  assert.equal(process.exitCode, 1);
+});
+
+test('an answered request is not refused again when the relay later fails closed', async () => {
+  const harness = createHarness();
+
+  harness.stdin.write('{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{}}\n');
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.child.stdout.write('{"jsonrpc":"2.0","id":7,"result":{"content":[]}}\n');
+  await new Promise((resolve) => setImmediate(resolve));
+
+  harness.child.emit('exit', 1, null);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const frames = harness.stdout().trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  assert.equal(frames.length, 1);
+  assert.deepEqual(frames[0], { jsonrpc: '2.0', id: 7, result: { content: [] } });
+});
+
+test('a notification carries no id and is never refused', async () => {
+  const harness = createHarness();
+
+  harness.stdin.write('{"jsonrpc":"2.0","method":"notifications/initialized"}\n');
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.child.emit('exit', 1, null);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(harness.stdout(), '');
+});
