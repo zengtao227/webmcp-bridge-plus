@@ -14,6 +14,8 @@ export const NATIVE_HOST_RUNTIME_PAYLOAD = Object.freeze([
   'native/host/start.js',
   'native/host/relay.js',
   'native/host/firewall.js',
+  'native/host/request-ledger.js',
+  'native/host/unavailable-responder.js',
   'native/deploy/build-image.js',
   'native/deploy/configure-workspace.js',
   'native/deploy/container-controller.js',

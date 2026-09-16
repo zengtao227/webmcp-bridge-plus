@@ -203,7 +203,10 @@ Installer-created tunnel/runtime state, LaunchAgent state, image/config pins and
 
 ## 9. Host relay and Secret Firewall
 
-Requests remain opaque at the host relay and are forwarded to the verified Native MCP process.
+Request bytes remain opaque at the host relay and are forwarded verbatim to the verified Native MCP
+process. The relay additionally observes, read-only, which JSON-RPC request ids are still
+unanswered. That observation grants no authority over request content, selects nothing, and
+never alters what is forwarded; it exists only so a fail-closed exit can refuse those ids.
 
 The response path is:
 
@@ -221,7 +224,13 @@ ChatGPT / Web AI
 
 The host boundary independently rejects malformed, oversized or policy-unsafe output.
 
-Unexpected child/process/runtime failures terminate the host MCP process non-zero with sanitized diagnostics. The relay does not synthesize a weaker fallback path.
+Unexpected child/process/runtime failures terminate the host MCP process non-zero with sanitized
+diagnostics. Before terminating, the boundary answers every outstanding JSON-RPC request id with an
+explicit error, and a boundary that cannot verify its container refuses requests the same way for a
+bounded window before exiting. A refusal is not a fallback path: no container is started, no tool
+runs, and no result is synthesized. Silence is not equivalent — the Secure MCP Tunnel drops a
+forwarded command it never receives a response for without posting any response of its own, which
+the caller cannot distinguish from work still in progress.
 
 The Secret Firewall is defense in depth. It does not replace careful workspace-root selection and container isolation.
 
